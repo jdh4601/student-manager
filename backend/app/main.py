@@ -11,6 +11,7 @@ from app.routers import semesters
 from app.routers import classes
 from app.routers import users
 from app.routers import feedbacks
+from app.routers import grades
 from app.routers import counselings
 from app.routers import notifications
 from app.routers import students
@@ -56,6 +57,7 @@ app.include_router(semesters.router, prefix="/api/v1")
 app.include_router(classes.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(feedbacks.router, prefix="/api/v1")
+app.include_router(grades.router, prefix="/api/v1")
 app.include_router(counselings.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(students.router, prefix="/api/v1")

@@ -93,22 +93,24 @@ async def seed_teacher_other(seed_school) -> User:
 
 
 @pytest.fixture
-async def auth_client_teacher(client: AsyncClient, seed_teacher: User) -> AsyncGenerator[AsyncClient, None]:
+async def auth_client_teacher(seed_teacher: User) -> AsyncGenerator[AsyncClient, None]:
     token = create_access_token({
         "sub": str(seed_teacher.id),
         "role": seed_teacher.role,
         "school_id": str(seed_teacher.school_id),
     })
-    client.headers.update({"Authorization": f"Bearer {token}"})
-    yield client
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers={"Authorization": f"Bearer {token}"}) as c:
+        yield c
 
 
 @pytest.fixture
-async def auth_client_teacher_other(client: AsyncClient, seed_teacher_other: User) -> AsyncGenerator[AsyncClient, None]:
+async def auth_client_teacher_other(seed_teacher_other: User) -> AsyncGenerator[AsyncClient, None]:
     token = create_access_token({
         "sub": str(seed_teacher_other.id),
         "role": seed_teacher_other.role,
         "school_id": str(seed_teacher_other.school_id),
     })
-    client.headers.update({"Authorization": f"Bearer {token}"})
-    yield client
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test", headers={"Authorization": f"Bearer {token}"}) as c:
+        yield c
