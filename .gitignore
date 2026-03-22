@@ -5,9 +5,11 @@ __pycache__/
 # Dev environment
 .omc/
 .omx/
+.env
 
 # Python
 backend/.venv/
+backend/.venv312/
 backend/test.db
 backend/.env
 
