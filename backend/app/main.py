@@ -1,6 +1,9 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from app.config import settings
 from app.routers import auth
@@ -20,6 +23,10 @@ class AppException(Exception):
 
 app = FastAPI(title="Student Manager API", version="0.1.0")
 
+# Rate limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
@@ -35,6 +42,11 @@ async def app_exception_handler(request: Request, exc: AppException):
         status_code=exc.status_code,
         content={"detail": exc.detail, "code": exc.code},
     )
+
+
+@app.exception_handler(RateLimitExceeded)
+async def ratelimit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"detail": "Too Many Requests", "code": "RATE_LIMIT_EXCEEDED"})
 
 
 @app.get("/health")

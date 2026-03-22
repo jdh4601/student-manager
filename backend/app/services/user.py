@@ -26,6 +26,8 @@ async def create_student_account(
     cls = result.scalar_one_or_none()
     if cls is None or cls.school_id != school_id:
         raise AppException(404, "Class not found", "CLASS_NOT_FOUND")
+    if cls.teacher_id != teacher_id:
+        raise AppException(403, "권한이 부족합니다.", "FORBIDDEN")
 
     user = User(
         school_id=school_id,
@@ -121,4 +123,3 @@ async def deactivate_student(db: AsyncSession, *, student_id: uuid.UUID, teacher
         raise AppException(403, "권한이 부족합니다.", "FORBIDDEN")
     user.is_active = False
     await db.commit()
-

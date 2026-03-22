@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import get_current_user
 from app.dependencies.db import get_db
-from app.main import AppException
+from app.main import AppException, limiter
 from app.models.user import User
 from app.schemas.auth import LoginRequest, MeResponse, RefreshResponse, TokenResponse
 from app.services.auth import authenticate_user, create_tokens
@@ -16,7 +16,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     user = await authenticate_user(db, body.email, body.password)
     if user is None:
         raise AppException(401, "이메일 또는 비밀번호가 올바르지 않습니다.", "AUTH_INVALID_CREDENTIALS")
@@ -73,4 +74,3 @@ async def me(current_user: User = Depends(get_current_user)):
         role=current_user.role,
         school_id=str(current_user.school_id),
     )
-

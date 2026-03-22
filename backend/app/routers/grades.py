@@ -27,6 +27,7 @@ async def create_grade_endpoint(
         semester_id=uuid.UUID(body.semester_id),
         score=Decimal(body.score),
         created_by=current_user.id,
+        teacher_id=current_user.id,
     )
     return GradeResponse(
         id=str(grade.id),
@@ -45,7 +46,12 @@ async def update_grade_endpoint(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_role("teacher")),
 ):
-    grade = await update_grade(db, grade_id=uuid.UUID(grade_id), score=Decimal(body.score))
+    grade = await update_grade(
+        db,
+        grade_id=uuid.UUID(grade_id),
+        score=Decimal(body.score),
+        teacher_id=current_user.id,
+    )
     return GradeResponse(
         id=str(grade.id),
         student_id=str(grade.student_id),
@@ -65,7 +71,7 @@ async def list_grades_endpoint(
 ):
     sid = uuid.UUID(student_id)
     sem = uuid.UUID(semester_id) if semester_id else None
-    rows = await list_grades(db, student_id=sid, semester_id=sem)
+    rows = await list_grades(db, student_id=sid, semester_id=sem, teacher_id=current_user.id)
     return [
         GradeResponse(
             id=str(g.id),
@@ -77,4 +83,3 @@ async def list_grades_endpoint(
         )
         for g in rows
     ]
-
