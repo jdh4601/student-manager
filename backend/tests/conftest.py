@@ -77,11 +77,38 @@ async def seed_teacher(seed_school) -> User:
 
 
 @pytest.fixture
+async def seed_teacher_other(seed_school) -> User:
+    async with async_session_test() as session:
+        teacher = User(
+            school_id=seed_school.id,
+            email="teacher2@test.com",
+            hashed_password=hash_password("password123"),
+            role="teacher",
+            name="이교사",
+        )
+        session.add(teacher)
+        await session.commit()
+        await session.refresh(teacher)
+        return teacher
+
+
+@pytest.fixture
 async def auth_client_teacher(client: AsyncClient, seed_teacher: User) -> AsyncGenerator[AsyncClient, None]:
     token = create_access_token({
         "sub": str(seed_teacher.id),
         "role": seed_teacher.role,
         "school_id": str(seed_teacher.school_id),
+    })
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    yield client
+
+
+@pytest.fixture
+async def auth_client_teacher_other(client: AsyncClient, seed_teacher_other: User) -> AsyncGenerator[AsyncClient, None]:
+    token = create_access_token({
+        "sub": str(seed_teacher_other.id),
+        "role": seed_teacher_other.role,
+        "school_id": str(seed_teacher_other.school_id),
     })
     client.headers.update({"Authorization": f"Bearer {token}"})
     yield client
