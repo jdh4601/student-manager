@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.database import Base
 from app.dependencies.db import get_db
+from app.models import School, User
+from app.utils.security import hash_password, create_access_token
 from app.main import app
 
 TEST_DATABASE_URL = "sqlite+aiosqlite:///./test.db"
@@ -46,3 +48,40 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture
+async def seed_school(setup_db) -> School:
+    async with async_session_test() as session:
+        school = School(name="Test School")
+        session.add(school)
+        await session.commit()
+        await session.refresh(school)
+        return school
+
+
+@pytest.fixture
+async def seed_teacher(seed_school) -> User:
+    async with async_session_test() as session:
+        teacher = User(
+            school_id=seed_school.id,
+            email="teacher@test.com",
+            hashed_password=hash_password("password123"),
+            role="teacher",
+            name="김교사",
+        )
+        session.add(teacher)
+        await session.commit()
+        await session.refresh(teacher)
+        return teacher
+
+
+@pytest.fixture
+async def auth_client_teacher(client: AsyncClient, seed_teacher: User) -> AsyncGenerator[AsyncClient, None]:
+    token = create_access_token({
+        "sub": str(seed_teacher.id),
+        "role": seed_teacher.role,
+        "school_id": str(seed_teacher.school_id),
+    })
+    client.headers.update({"Authorization": f"Bearer {token}"})
+    yield client
