@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
+from app.routers import auth
 
 
 class AppException(Exception):
@@ -37,3 +38,6 @@ async def app_exception_handler(request: Request, exc: AppException):
 async def health_check():
     return {"status": "ok"}
 
+
+# Routers
+app.include_router(auth.router, prefix="/api/v1")
