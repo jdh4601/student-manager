@@ -5,7 +5,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies.auth import get_current_user, require_role
+from app.dependencies.auth import require_role
 from app.dependencies.db import get_db
 from app.models.user import User
 from app.schemas.grade import GradeCreate, GradeResponse
@@ -44,7 +44,7 @@ async def update_grade_endpoint(
     grade_id: str,
     body: GradeCreate,  # reuse for simplicity (score only relevant on update)
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role("teacher")),
+    current_user: User = Depends(require_role("teacher")),
 ):
     grade = await update_grade(
         db,
@@ -67,7 +67,7 @@ async def list_grades_endpoint(
     student_id: str,
     semester_id: Optional[str] = Query(default=None),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_role("teacher")),
+    current_user: User = Depends(require_role("teacher")),
 ):
     sid = uuid.UUID(student_id)
     sem = uuid.UUID(semester_id) if semester_id else None
