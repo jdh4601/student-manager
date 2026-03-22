@@ -24,6 +24,8 @@ def event_loop():
 
 @pytest.fixture(autouse=True)
 async def setup_db():
+    # Ensure models are registered before creating tables
+    import app.models  # noqa: F401
     async with engine_test.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
