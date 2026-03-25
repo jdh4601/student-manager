@@ -55,3 +55,25 @@ export interface GradeItem {
   grade_rank: number | null;
 }
 
+export interface Feedback {
+  id: string;
+  student_id: string;
+  teacher_id: string;
+  category: 'grade' | 'behavior' | 'attendance' | 'attitude';
+  content: string;
+  is_visible_to_student: boolean;
+  is_visible_to_parent: boolean;
+  created_at: string;
+}
+
+export interface Counseling {
+  id: string;
+  student_id: string;
+  teacher_id: string;
+  date: string;
+  content: string;
+  next_plan: string | null;
+  is_shared: boolean;
+  created_at: string;
+}
+
