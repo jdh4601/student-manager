@@ -2,6 +2,7 @@ import {
   Legend,
   PolarAngleAxis,
   PolarGrid,
+  PolarRadiusAxis,
   Radar,
   RadarChart as RechartsRadarChart,
   ResponsiveContainer,
@@ -31,6 +32,7 @@ export default function GradeRadarChart({ subjects, grades }: GradeRadarChartPro
       <RechartsRadarChart data={data}>
         <PolarGrid />
         <PolarAngleAxis dataKey="subject" />
+        <PolarRadiusAxis angle={90} domain={[0, 100]} tickCount={6} />
         <Radar name="점수" dataKey="score" stroke="#6366f1" fill="#6366f1" fillOpacity={0.4} />
         <Tooltip />
         <Legend />
