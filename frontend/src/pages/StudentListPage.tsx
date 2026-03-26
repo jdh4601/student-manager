@@ -43,7 +43,9 @@ export default function StudentListPage() {
           <button
             className="px-3 py-1 rounded text-sm border"
             disabled={!students || students.length === 0}
-            onClick={() => students && exportStudentsToExcel(students, currentClassLabel)}
+            onClick={async () => {
+              if (students) await exportStudentsToExcel(students, currentClassLabel);
+            }}
           >
             Excel로 내보내기
           </button>

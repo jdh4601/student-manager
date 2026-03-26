@@ -74,13 +74,17 @@ export default function GradesPage() {
         <div className="flex gap-2">
           <button
             className="px-3 py-1 rounded text-sm border"
-            onClick={() => exportGradesToExcel(subjects, grades || [], studentName || '학생')}
+            onClick={async () =>
+              await exportGradesToExcel(subjects, grades || [], studentName || '학생')
+            }
           >
             Excel 내보내기
           </button>
           <button
             className="px-3 py-1 rounded text-sm border"
-            onClick={() => exportGradesToPDF(subjects, grades || [], studentName || '학생')}
+            onClick={async () =>
+              await exportGradesToPDF(subjects, grades || [], studentName || '학생')
+            }
           >
             PDF 내보내기
           </button>
