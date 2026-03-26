@@ -1,0 +1,63 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: sm-db
+    environment:
+      POSTGRES_USER: sm
+      POSTGRES_PASSWORD: smpass
+      POSTGRES_DB: student_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sm -d student_manager"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    container_name: sm-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://sm:smpass@db:5432/student_manager
+      TEST_DATABASE_URL: sqlite+aiosqlite:///./test.db
+      SECRET_KEY: change-me-in-production
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      REFRESH_TOKEN_EXPIRE_DAYS: 7
+      ALLOWED_ORIGINS: '["http://localhost:5173"]'
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: >-
+      sh -c "python -c 'import asyncio; from seed import seed; asyncio.run(seed())' &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+
+  frontend:
+    image: node:20-alpine
+    container_name: sm-frontend
+    working_dir: /app
+    environment:
+      # Vite dev server proxy to backend service in the compose network
+      VITE_API_PROXY: http://backend:8000
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata: {}
+
