@@ -27,6 +27,9 @@ export interface StudentSummary {
 
 export interface StudentDetail extends StudentSummary {
   birth_date: string | null;
+  gender: string | null;
+  phone: string | null;
+  address: string | null;
 }
 
 export interface Attendance {
@@ -76,4 +79,3 @@ export interface Counseling {
   is_shared: boolean;
   created_at: string;
 }
-

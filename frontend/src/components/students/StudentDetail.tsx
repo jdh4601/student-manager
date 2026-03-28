@@ -9,6 +9,15 @@ export default function StudentDetail({ student, attendance, notes }: { student:
           <div><span className="text-gray-600">이름: </span>{student.name}</div>
           <div><span className="text-gray-600">번호: </span>{student.student_number}</div>
           <div><span className="text-gray-600">생년월일: </span>{student.birth_date ?? '-'}</div>
+          {student.gender && (
+            <div><span className="text-gray-600">성별: </span>{student.gender === 'male' ? '남' : '여'}</div>
+          )}
+          {student.phone && (
+            <div><span className="text-gray-600">연락처: </span>{student.phone}</div>
+          )}
+          {student.address && (
+            <div className="col-span-2"><span className="text-gray-600">주소: </span>{student.address}</div>
+          )}
         </div>
       </section>
 
@@ -48,4 +57,3 @@ export default function StudentDetail({ student, attendance, notes }: { student:
     </div>
   );
 }
-
