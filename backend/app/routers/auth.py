@@ -12,6 +12,7 @@ from app.models.user import User
 from app.schemas.auth import LoginRequest, MeResponse, RefreshResponse, TokenResponse
 from app.services.auth import authenticate_user, create_tokens
 from app.utils.security import create_access_token, decode_token
+from app.config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -29,8 +30,8 @@ async def login(request: Request, body: LoginRequest, response: Response, db: As
         key="refresh_token",
         value=refresh_token,
         httponly=True,
-        secure=True,
-        samesite="strict",
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
         max_age=7 * 24 * 60 * 60,
     )
     return TokenResponse(
