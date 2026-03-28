@@ -13,7 +13,9 @@ from app.models.grade import Grade
 from app.models.subject import Subject
 from app.models.user import User
 from app.schemas.class_ import ClassCreate, ClassResponse
+from app.schemas.student import StudentDirectCreate, StudentDetail
 from app.schemas.subject import SubjectCreate, SubjectResponse
+from app.services.student import create_student as create_student_service
 
 router = APIRouter(prefix="/classes", tags=["classes"]) 
 
@@ -120,3 +122,35 @@ async def delete_subject(
 
     await db.delete(subj)
     await db.commit()
+
+
+@router.post("/{class_id}/students", response_model=StudentDetail, status_code=status.HTTP_201_CREATED)
+async def create_student(
+    class_id: str,
+    body: StudentDirectCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("teacher")),
+):
+    student, user = await create_student_service(
+        db,
+        class_id=uuid.UUID(class_id),
+        teacher_id=current_user.id,
+        school_id=current_user.school_id,
+        name=body.name,
+        student_number=body.student_number,
+        birth_date=body.birth_date,
+        gender=body.gender,
+        phone=body.phone,
+        address=body.address,
+    )
+    return StudentDetail(
+        id=str(student.id),
+        user_id=str(user.id),
+        class_id=str(student.class_id),
+        name=user.name,
+        student_number=student.student_number,
+        birth_date=student.birth_date,
+        gender=student.gender,
+        phone=student.phone,
+        address=student.address,
+    )
