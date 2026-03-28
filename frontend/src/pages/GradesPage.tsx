@@ -6,6 +6,7 @@ import { listSubjects } from '../api/classes';
 import { useGrades, useUpsertGrade } from '../hooks/useGrades';
 import GradeTable from '../components/grades/GradeTable';
 import GradeRadarChart from '../components/grades/RadarChart';
+import GradeExcelUploadModal from '../components/grades/GradeExcelUploadModal';
 import type { Semester, Subject } from '../types';
 import { exportGradesToExcel, exportGradesToPDF } from '../utils/exportHelpers';
 
@@ -18,6 +19,8 @@ export default function GradesPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [semesters, setSemesters] = useState<Semester[]>([]);
   const [tab, setTab] = useState<Tab>('table');
+  const [showGradeUpload, setShowGradeUpload] = useState(false);
+  const [classIdFromStudent, setClassIdFromStudent] = useState<string>('');
   const [studentName, setStudentName] = useState<string>('');
   const { data: grades } = useGrades(studentId || '', semesterId || undefined);
   const upsert = useUpsertGrade(studentId || '', semesterId || undefined);
@@ -34,6 +37,7 @@ export default function GradesPage() {
         setStudentName(s.name);
         const subjs = await listSubjects(s.class_id);
         setSubjects(subjs);
+        setClassIdFromStudent(s.class_id);
       } finally {
         setLoading(false);
       }
@@ -72,6 +76,12 @@ export default function GradesPage() {
           </select>
         </div>
         <div className="flex gap-2">
+          <button
+            className="px-3 py-1 rounded text-sm border"
+            onClick={() => setShowGradeUpload(true)}
+          >
+            엑셀로 성적 등록
+          </button>
           <button
             className="px-3 py-1 rounded text-sm border"
             onClick={async () =>
@@ -116,6 +126,13 @@ export default function GradesPage() {
         />
       ) : (
         <GradeRadarChart subjects={subjects} grades={grades || []} />
+      )}
+      {showGradeUpload && classIdFromStudent && semesterId && (
+        <GradeExcelUploadModal
+          classId={classIdFromStudent}
+          semesterId={semesterId}
+          onClose={() => setShowGradeUpload(false)}
+        />
       )}
     </div>
   );
