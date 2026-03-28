@@ -30,7 +30,10 @@ apiClient.interceptors.request.use(async (config) => {
 apiClient.interceptors.response.use(
   (res) => res,
   async (error) => {
-    if (error.response?.status === 401 && !error.config.__isRetryRequest) {
+    const url: string | undefined = error.config?.url;
+    // Do not attempt refresh for auth endpoints themselves to avoid loops
+    const isAuthEndpoint = url?.includes('/auth/refresh') || url?.includes('/auth/login');
+    if (error.response?.status === 401 && !error.config.__isRetryRequest && !isAuthEndpoint) {
       error.config.__isRetryRequest = true;
       try {
         const { data } = await axios.post(
@@ -45,7 +48,7 @@ apiClient.interceptors.response.use(
       } catch {
         const { useAuthStore } = await getAuthStore();
         useAuthStore.getState().logout();
-        window.location.href = '/login';
+        window.location.href = '/login?reason=expired';
       }
     }
     return Promise.reject(error);

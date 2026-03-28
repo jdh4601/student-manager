@@ -11,3 +11,7 @@ export async function listSubjects(classId: string): Promise<Subject[]> {
   return data;
 }
 
+export async function createClass(body: { name: string; grade: number; year: number }): Promise<ClassSummary> {
+  const { data } = await apiClient.post<ClassSummary>('/classes', body);
+  return data;
+}
