@@ -610,3 +610,17 @@ student-manager/
 | 4 | 초기 규모 | 1~10학교 (MVP) |
 | 5 | MVP 단일 기능 | 학생 성적 관리 |
 | 6 | 교사 간 공유 방식 | 같은 학교 교사 전체 공유 (학교 간 완전 격리) |
+
+---
+
+## 14. Implementation Delta (MVP 기준)
+
+PRD v2.0 대비 현재 구현된 MVP의 차이를 명시합니다. 향후 v2에서 PRD와 완전히 일치하도록 보완 예정입니다.
+
+- 목록 응답 포맷: 공통 `{ total, items }` 대신, 현 시점에는 단순 배열을 반환합니다. (예: `/users/students`, `/grades`, `/notifications`)
+- 알림 API: `GET /notifications`는 단순 배열을 반환하며, `PATCH /notifications/read-all` 응답은 `{ updated: number }`입니다. (별도의 `unread_count` 필드는 없고 클라이언트에서 계산)
+- 레이트 리밋 오류 코드: 로그인 과다 시도는 `{ code: "RATE_LIMIT_EXCEEDED" }`로 반환됩니다. (PRD의 `AUTH_RATE_LIMITED`와 상이)
+- 인증/권한 오류 포맷: 비즈니스 오류는 `{ detail, code }` 형식을 사용하나, 일부 401/403 인증 가드 오류는 FastAPI 기본 오류 형식이 반환될 수 있습니다.
+- 학기 목록 권한: `GET /semesters`는 MVP에서 teacher만 허용됩니다. (student/parent는 v2에서 확장)
+- 학생 비활성화: `PATCH /users/students/{id}/deactivate`는 204(No Content)로 응답합니다.
+- 성적 기능: `POST /grades/bulk`는 미구현입니다. 대량 입력은 `POST /import/grades`(CSV)로 대체합니다. `GET /grades` 응답에는 `subject_name` 필드가 없고 `subject_id`만 포함됩니다. `GET /grades/{student_id}/summary`는 학기 선택적 파라미터로 총점/평균/과목수 및 성적 목록을 반환합니다.

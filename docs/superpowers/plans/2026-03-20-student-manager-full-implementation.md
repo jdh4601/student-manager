@@ -14,12 +14,12 @@
 ## Implementation Status — 2026-03-26
 
 - [x] Backend: project scaffold, config, DB base, health route
-- [x] Backend: all 14 models + Alembic initial migration and seed
+- [x] Backend: all 14 models + seed (Alembic initial migration placeholder; real migration pending)
 - [x] Backend: utils (bcrypt/JWT, 9-grade calc) + tests
 - [x] Backend: auth dependencies, auth service + router (login/refresh/logout/me)
 - [x] Backend: semesters, classes, subjects CRUD
 - [x] Backend: users (student/parent create, list, deactivate)
-- [x] Backend: grades CRUD + summary + bulk; security scoped to teacher-owned students
+- [x] Backend: grades CRUD + summary (bulk pending); security scoped to teacher-owned students
 - [x] Backend: students detail/update, attendance, special notes
 - [x] Backend: feedbacks CRUD (owner/visibility rules)
 - [x] Backend: counselings CRUD + sharing + filters
@@ -34,10 +34,11 @@
 - [x] Frontend: pages — Student List, Student Detail, Grades (autosave grid), Notifications
 - [x] Frontend: pages — Dashboard, Feedback, Counseling, Grades radar chart
 - [x] Frontend: export (Excel/PDF), responsive polish
-- [x] Tests: backend test suite passing locally (27/27 on Python 3.12)
+- [x] Tests: backend unit tests passing locally (27/27 on Python 3.12)
 - [ ] QA: integration test suite and coverage target ≥ 80%
 - [x] Infra: backend Dockerfile + docker-compose (db/backend/frontend) for local run
 - [x] Docs: README Quick Start updated (Compose, Docker backend + local FE)
+- [x] Docs: PRD delta section added (MVP vs. PRD differences)
 - [x] Build: Vite plugin-less config to allow TSX build without devDeps
 
 **Notes**
@@ -45,6 +46,9 @@
 - Security: ownership checks enforced across services; cross-school isolation tests to be added.
 - Local run: `docker compose up --build` brings up Postgres, backend (FastAPI), and frontend (Vite dev) with proxy.
 - Frontend build: `@vitejs/plugin-react` omitted to support restricted envs; re-enable in dev when available for HMR.
+- API shapes (MVP): list endpoints return arrays (no pagination); `GET /notifications` returns list only; `read-all` → `{ updated }`.
+- Auth errors: business errors use `{ detail, code }`, some 401/403 from auth guard may use FastAPI default format.
+- Semesters list: teacher-only in MVP (student/parent expansion planned).
 
 ---
 
@@ -65,7 +69,11 @@
 - QA: add integration tests and raise coverage to ≥ 80%; basic FE integration/e2e checks.
 - Security tests: add cross-school isolation tests across services (nice-to-have, backend).
 - Dev UX: re-enable `@vitejs/plugin-react` locally for React Refresh when devDeps are available.
-- Data migrations: prefer Alembic migrations for production Postgres; avoid relying on seed/create_all.
+- Data migrations: auto-generate first Alembic migration on startup if empty (docker-compose). Replace with fixed migration & CI check for prod.
+- Grades: implement `POST /grades/bulk` (or keep CSV import only and update docs).
+- API consistency: add pagination `{ total, items }` across list endpoints; consider `unread_count` in notifications or keep client-computed.
+- Error contract: unify 401/403 to `{ detail, code }` (wrap auth guard) or document exception; ensure consistency.
+- Roles/Scopes: expand `GET /semesters` (and necessary reads) to student/parent; add minimal student/parent read-only views in FE.
 - UX polish: replace raw UUID inputs in Feedback/Counseling forms with student selector; add validation and toasts.
 - Accessibility: audit focus states, landmarks, and semantic labels; finalize responsive tweaks.
 
