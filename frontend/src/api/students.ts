@@ -6,7 +6,10 @@ export async function getStudent(id: string): Promise<StudentDetail> {
   return data;
 }
 
-export async function updateStudent(id: string, payload: Partial<Pick<StudentDetail, 'name'|'student_number'|'birth_date'>>): Promise<StudentDetail> {
+export async function updateStudent(
+  id: string,
+  payload: Partial<Pick<StudentDetail, 'name' | 'student_number' | 'birth_date' | 'gender' | 'phone' | 'address'>>,
+): Promise<StudentDetail> {
   const { data } = await apiClient.put<StudentDetail>(`/students/${id}`, payload);
   return data;
 }
@@ -31,3 +34,17 @@ export async function createSpecialNote(studentId: string, body: { content: stri
   return data;
 }
 
+export async function createStudent(
+  classId: string,
+  body: {
+    name: string;
+    student_number: number;
+    birth_date?: string;
+    gender?: string;
+    phone?: string;
+    address?: string;
+  },
+): Promise<StudentDetail> {
+  const { data } = await apiClient.post<StudentDetail>(`/classes/${classId}/students`, body);
+  return data;
+}
