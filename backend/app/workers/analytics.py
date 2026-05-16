@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 
 
 GRADE_EVENTS_TOPIC = "grade_events"
+ATTENDANCE_EVENTS_TOPIC = "attendance_events"
+SUBSCRIBED_TOPICS = (GRADE_EVENTS_TOPIC, ATTENDANCE_EVENTS_TOPIC)
 CONSUMER_GROUP_ID = "analytics-worker"
 
 
@@ -42,6 +44,16 @@ REQUIRED_PAYLOAD_FIELDS = (
     "student_id",
     "subject_id",
     "semester_id",
+    "op",
+)
+
+REQUIRED_ATTENDANCE_PAYLOAD_FIELDS = (
+    "event_id",
+    "attendance_id",
+    "student_id",
+    "semester_id",
+    "date",
+    "status",
     "op",
 )
 
@@ -60,6 +72,13 @@ class AnalyticsRepository(Protocol):
         Returns True if a new row was inserted, False if the event_id already
         existed (ON CONFLICT DO NOTHING). The caller uses this to skip the
         agg recompute on retried messages.
+        """
+
+    async def insert_fact_attendance(self, *, event_id: int, payload: dict) -> bool:
+        """Insert one row into analytics.fact_attendance_event.
+
+        Same semantics as ``insert_fact_event`` but for attendance — returns
+        False on event_id conflict so the consumer can skip the recompute.
         """
 
     async def recompute_agg_subject(
@@ -109,6 +128,41 @@ async def process_event(payload: dict, *, repo: AnalyticsRepository) -> None:
     await repo.recompute_agg_overall(student_id=student_id, semester_id=semester_id)
 
 
+async def process_attendance_event(payload: dict, *, repo: AnalyticsRepository) -> None:
+    """Apply one attendance_events payload to the analytics schema.
+
+    Attendance only touches agg_student_overall.attendance_present_rate —
+    there is no per-subject aggregation for attendance.
+    """
+    for field_name in REQUIRED_ATTENDANCE_PAYLOAD_FIELDS:
+        if field_name not in payload:
+            raise KeyError(
+                f"attendance_events payload missing required field: {field_name}"
+            )
+
+    event_id = int(payload["event_id"])
+    inserted = await repo.insert_fact_attendance(event_id=event_id, payload=payload)
+    if not inserted:
+        logger.debug(
+            "event_id=%s already in fact_attendance_event — skipping recompute", event_id
+        )
+        return
+
+    await repo.recompute_agg_overall(
+        student_id=payload["student_id"], semester_id=payload["semester_id"]
+    )
+
+
+async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
+    """Route a Kafka record to the right per-topic handler."""
+    if topic == GRADE_EVENTS_TOPIC:
+        await process_event(payload, repo=repo)
+    elif topic == ATTENDANCE_EVENTS_TOPIC:
+        await process_attendance_event(payload, repo=repo)
+    else:
+        raise ValueError(f"no handler registered for topic={topic!r}")
+
+
 class PostgresAnalyticsRepo:
     """Postgres-backed implementation using raw SQL against the analytics schema.
 
@@ -144,6 +198,34 @@ class PostgresAnalyticsRepo:
                 "semester_id": payload["semester_id"],
                 "score": payload.get("score"),
                 "grade_rank": payload.get("grade_rank"),
+                "op": payload["op"],
+            },
+        )
+        return (result.rowcount or 0) > 0
+
+    async def insert_fact_attendance(self, *, event_id: int, payload: dict) -> bool:
+        from sqlalchemy import text
+
+        stmt = text(
+            """
+            INSERT INTO analytics.fact_attendance_event
+                (event_id, attendance_id, student_id, semester_id,
+                 date, status, op, occurred_at)
+            VALUES
+                (:event_id, :attendance_id, :student_id, :semester_id,
+                 :date, :status, :op, now())
+            ON CONFLICT (event_id) DO NOTHING
+            """
+        )
+        result = await self._db.execute(
+            stmt,
+            {
+                "event_id": event_id,
+                "attendance_id": payload["attendance_id"],
+                "student_id": payload["student_id"],
+                "semester_id": payload["semester_id"],
+                "date": payload["date"],
+                "status": payload["status"],
                 "op": payload["op"],
             },
         )
@@ -205,11 +287,18 @@ class PostgresAnalyticsRepo:
         )
 
     async def recompute_agg_overall(self, *, student_id: str, semester_id: str) -> None:
+        """Recompute every agg_student_overall column from the current fact state.
+
+        We always recompute total/avg/subject_count (from fact_grade_event) AND
+        attendance_present_rate (from fact_attendance_event) in the same UPSERT,
+        regardless of which event triggered the call. This keeps a single
+        consistent UPSERT path for both grade and attendance consumers.
+        """
         from sqlalchemy import text
 
         stmt = text(
             """
-            WITH latest AS (
+            WITH latest_grades AS (
                 SELECT DISTINCT ON (grade_id)
                     grade_id, subject_id, score
                 FROM analytics.fact_grade_event
@@ -217,26 +306,47 @@ class PostgresAnalyticsRepo:
                   AND semester_id = :semester_id
                 ORDER BY grade_id, occurred_at DESC, event_id DESC
             ),
-            stats AS (
+            grade_stats AS (
                 SELECT
                     sum(score)                            AS total_score,
                     avg(score)                            AS avg_score,
                     count(DISTINCT subject_id)::int       AS subject_count
-                FROM latest
+                FROM latest_grades
                 WHERE score IS NOT NULL
+            ),
+            latest_attendance AS (
+                SELECT DISTINCT ON (attendance_id)
+                    attendance_id, status
+                FROM analytics.fact_attendance_event
+                WHERE student_id = :student_id
+                  AND semester_id = :semester_id
+                ORDER BY attendance_id, occurred_at DESC, event_id DESC
+            ),
+            attendance_stats AS (
+                SELECT
+                    CASE WHEN count(*) > 0
+                         THEN ROUND(
+                              count(*) FILTER (WHERE status = 'present')::numeric
+                              / count(*)::numeric, 3)
+                         ELSE NULL
+                    END AS present_rate
+                FROM latest_attendance
             )
             INSERT INTO analytics.agg_student_overall
                 (student_id, semester_id,
-                 total_score, avg_score, subject_count, refreshed_at)
+                 total_score, avg_score, subject_count,
+                 attendance_present_rate, refreshed_at)
             SELECT
                 :student_id, :semester_id,
-                total_score, avg_score, COALESCE(subject_count, 0), now()
-            FROM stats
+                gs.total_score, gs.avg_score, COALESCE(gs.subject_count, 0),
+                ats.present_rate, now()
+            FROM grade_stats gs CROSS JOIN attendance_stats ats
             ON CONFLICT (student_id, semester_id) DO UPDATE SET
-                total_score   = EXCLUDED.total_score,
-                avg_score     = EXCLUDED.avg_score,
-                subject_count = EXCLUDED.subject_count,
-                refreshed_at  = EXCLUDED.refreshed_at
+                total_score             = EXCLUDED.total_score,
+                avg_score               = EXCLUDED.avg_score,
+                subject_count           = EXCLUDED.subject_count,
+                attendance_present_rate = EXCLUDED.attendance_present_rate,
+                refreshed_at            = EXCLUDED.refreshed_at
             """
         )
         await self._db.execute(
@@ -291,7 +401,7 @@ async def run(
                 payload = decode_record(record.value)
                 async with session_factory() as db:
                     repo = repo_builder(db)
-                    await process_event(payload, repo=repo)
+                    await dispatch_event(payload, repo=repo, topic=record.topic)
                     await db.commit()
                 await consumer.commit()
                 backoff = backoff_initial
@@ -310,7 +420,7 @@ def _build_default_consumer() -> Consumer:
     from aiokafka import AIOKafkaConsumer  # imported here to keep test runs cheap
 
     return AIOKafkaConsumer(
-        GRADE_EVENTS_TOPIC,
+        *SUBSCRIBED_TOPICS,
         bootstrap_servers=settings.kafka_bootstrap_servers,
         group_id=CONSUMER_GROUP_ID,
         enable_auto_commit=False,
