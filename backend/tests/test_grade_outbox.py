@@ -98,6 +98,7 @@ async def test_create_grade_emits_outbox_row(seed_school: School):
         "subject_id": str(subject.id),
         "semester_id": str(semester.id),
         "score": 85.5,
+        "grade_rank": grade.grade_rank,
         "op": "INSERT",
     }
 

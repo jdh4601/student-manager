@@ -42,9 +42,12 @@ async def _drain_once(db: AsyncSession, producer: Producer, *, batch_size: int =
     published_ids: list[int] = []
     for row in rows:
         try:
+            # Inject the outbox event_id so downstream consumers can dedupe
+            # on retries (see analytics-worker / SMS-53).
+            envelope = {**row.payload, "event_id": row.event_id}
             await producer.send_and_wait(
                 row.topic,
-                value=json.dumps(row.payload, ensure_ascii=False).encode("utf-8"),
+                value=json.dumps(envelope, ensure_ascii=False).encode("utf-8"),
                 key=str(row.aggregate_id).encode("utf-8"),
             )
         except Exception as exc:  # broker error / network / serialization

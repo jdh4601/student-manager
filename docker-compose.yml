@@ -103,6 +103,24 @@ services:
     volumes:
       - ./backend/app:/app/app
 
+  analytics-worker:
+    build:
+      context: ./backend
+    container_name: sm-analytics-worker
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL: postgresql+asyncpg://sm:smpass@db:5432/student_manager
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    command: ["python", "-m", "app.workers.analytics"]
+    restart: unless-stopped
+    volumes:
+      - ./backend/app:/app/app
+
   frontend:
     image: node:20-alpine
     container_name: sm-frontend

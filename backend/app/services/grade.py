@@ -26,6 +26,7 @@ def _grade_outbox_row(grade: Grade, *, op: str) -> Outbox:
         "subject_id": str(grade.subject_id),
         "semester_id": str(grade.semester_id),
         "score": float(grade.score) if grade.score is not None else None,
+        "grade_rank": grade.grade_rank,
         "op": op,
     }
     return Outbox(
