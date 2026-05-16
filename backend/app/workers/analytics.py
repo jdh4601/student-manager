@@ -34,7 +34,12 @@ logger = logging.getLogger(__name__)
 
 GRADE_EVENTS_TOPIC = "grade_events"
 ATTENDANCE_EVENTS_TOPIC = "attendance_events"
-SUBSCRIBED_TOPICS = (GRADE_EVENTS_TOPIC, ATTENDANCE_EVENTS_TOPIC)
+FEEDBACK_EVENTS_TOPIC = "feedback_events"
+SUBSCRIBED_TOPICS = (
+    GRADE_EVENTS_TOPIC,
+    ATTENDANCE_EVENTS_TOPIC,
+    FEEDBACK_EVENTS_TOPIC,
+)
 CONSUMER_GROUP_ID = "analytics-worker"
 
 
@@ -54,6 +59,14 @@ REQUIRED_ATTENDANCE_PAYLOAD_FIELDS = (
     "semester_id",
     "date",
     "status",
+    "op",
+)
+
+REQUIRED_FEEDBACK_PAYLOAD_FIELDS = (
+    "event_id",
+    "feedback_id",
+    "student_id",
+    "semester_id",
     "op",
 )
 
@@ -80,6 +93,9 @@ class AnalyticsRepository(Protocol):
         Same semantics as ``insert_fact_event`` but for attendance — returns
         False on event_id conflict so the consumer can skip the recompute.
         """
+
+    async def insert_fact_feedback(self, *, event_id: int, payload: dict) -> bool:
+        """Insert one row into analytics.fact_feedback_event (idempotent on event_id)."""
 
     async def recompute_agg_subject(
         self, *, student_id: str, subject_id: str, semester_id: str
@@ -153,12 +169,40 @@ async def process_attendance_event(payload: dict, *, repo: AnalyticsRepository) 
     )
 
 
+async def process_feedback_event(payload: dict, *, repo: AnalyticsRepository) -> None:
+    """Apply one feedback_events payload to the analytics schema.
+
+    Feedback touches only agg_student_overall.feedback_count, which is
+    recomputed from fact_feedback_event (DISTINCT ON feedback_id, latest
+    state, count rows where op != 'DELETE').
+    """
+    for field_name in REQUIRED_FEEDBACK_PAYLOAD_FIELDS:
+        if field_name not in payload:
+            raise KeyError(
+                f"feedback_events payload missing required field: {field_name}"
+            )
+
+    event_id = int(payload["event_id"])
+    inserted = await repo.insert_fact_feedback(event_id=event_id, payload=payload)
+    if not inserted:
+        logger.debug(
+            "event_id=%s already in fact_feedback_event — skipping recompute", event_id
+        )
+        return
+
+    await repo.recompute_agg_overall(
+        student_id=payload["student_id"], semester_id=payload["semester_id"]
+    )
+
+
 async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
     """Route a Kafka record to the right per-topic handler."""
     if topic == GRADE_EVENTS_TOPIC:
         await process_event(payload, repo=repo)
     elif topic == ATTENDANCE_EVENTS_TOPIC:
         await process_attendance_event(payload, repo=repo)
+    elif topic == FEEDBACK_EVENTS_TOPIC:
+        await process_feedback_event(payload, repo=repo)
     else:
         raise ValueError(f"no handler registered for topic={topic!r}")
 
@@ -226,6 +270,33 @@ class PostgresAnalyticsRepo:
                 "semester_id": payload["semester_id"],
                 "date": payload["date"],
                 "status": payload["status"],
+                "op": payload["op"],
+            },
+        )
+        return (result.rowcount or 0) > 0
+
+    async def insert_fact_feedback(self, *, event_id: int, payload: dict) -> bool:
+        from sqlalchemy import text
+
+        stmt = text(
+            """
+            INSERT INTO analytics.fact_feedback_event
+                (event_id, feedback_id, student_id, semester_id,
+                 category, op, occurred_at)
+            VALUES
+                (:event_id, :feedback_id, :student_id, :semester_id,
+                 :category, :op, now())
+            ON CONFLICT (event_id) DO NOTHING
+            """
+        )
+        result = await self._db.execute(
+            stmt,
+            {
+                "event_id": event_id,
+                "feedback_id": payload["feedback_id"],
+                "student_id": payload["student_id"],
+                "semester_id": payload["semester_id"],
+                "category": payload.get("category"),
                 "op": payload["op"],
             },
         )
@@ -331,21 +402,38 @@ class PostgresAnalyticsRepo:
                          ELSE NULL
                     END AS present_rate
                 FROM latest_attendance
+            ),
+            latest_feedback AS (
+                SELECT DISTINCT ON (feedback_id)
+                    feedback_id, op
+                FROM analytics.fact_feedback_event
+                WHERE student_id = :student_id
+                  AND semester_id = :semester_id
+                ORDER BY feedback_id, occurred_at DESC, event_id DESC
+            ),
+            feedback_stats AS (
+                SELECT count(*) FILTER (WHERE op != 'DELETE')::int AS feedback_count
+                FROM latest_feedback
             )
             INSERT INTO analytics.agg_student_overall
                 (student_id, semester_id,
                  total_score, avg_score, subject_count,
-                 attendance_present_rate, refreshed_at)
+                 attendance_present_rate, feedback_count, refreshed_at)
             SELECT
                 :student_id, :semester_id,
                 gs.total_score, gs.avg_score, COALESCE(gs.subject_count, 0),
-                ats.present_rate, now()
-            FROM grade_stats gs CROSS JOIN attendance_stats ats
+                ats.present_rate,
+                COALESCE(fs.feedback_count, 0),
+                now()
+            FROM grade_stats gs
+            CROSS JOIN attendance_stats ats
+            CROSS JOIN feedback_stats fs
             ON CONFLICT (student_id, semester_id) DO UPDATE SET
                 total_score             = EXCLUDED.total_score,
                 avg_score               = EXCLUDED.avg_score,
                 subject_count           = EXCLUDED.subject_count,
                 attendance_present_rate = EXCLUDED.attendance_present_rate,
+                feedback_count          = EXCLUDED.feedback_count,
                 refreshed_at            = EXCLUDED.refreshed_at
             """
         )

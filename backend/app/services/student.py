@@ -10,7 +10,6 @@ from app.errors import AppException
 from app.models.attendance import Attendance
 from app.models.class_ import Class
 from app.models.outbox import Outbox
-from app.models.semester import Semester
 from app.models.special_note import SpecialNote
 from app.models.student import Student
 from app.models.user import User
@@ -19,23 +18,11 @@ from app.models.counseling import Counseling
 from app.models.parent_student import ParentStudent
 from app.models.grade import Grade
 from app.schemas.user import StudentCreate
+from app.services.semester import current_semester_id
 from app.services.user import create_student_account
 
 
 ATTENDANCE_EVENTS_TOPIC = "attendance_events"
-
-
-async def _current_semester_id(db: AsyncSession) -> uuid.UUID | None:
-    """Return the most-recent semester id (year DESC, term DESC).
-
-    Attendance has no explicit semester_id column, and Semester carries
-    no date range; the most-recent semester is the closest proxy for
-    "current" until the spec adds an explicit binding.
-    """
-    result = await db.execute(
-        select(Semester.id).order_by(Semester.year.desc(), Semester.term.desc()).limit(1)
-    )
-    return result.scalar_one_or_none()
 
 
 def _attendance_outbox_row(att: Attendance, *, semester_id: uuid.UUID | None, op: str) -> Outbox:
@@ -117,7 +104,7 @@ async def create_attendance(
     note: str | None,
 ) -> Attendance:
     await _teacher_owns_student(db, student_id=student_id, teacher_id=teacher_id)
-    semester_id = await _current_semester_id(db)
+    semester_id = await current_semester_id(db)
     att = Attendance(student_id=student_id, date=date_, status=status, note=note)
     db.add(att)
     try:
@@ -168,7 +155,7 @@ async def update_attendance(
         att.status = status
     if note is not None:
         att.note = note
-    semester_id = await _current_semester_id(db)
+    semester_id = await current_semester_id(db)
     db.add(_attendance_outbox_row(att, semester_id=semester_id, op="UPDATE"))
     await db.commit()
     await db.refresh(att)

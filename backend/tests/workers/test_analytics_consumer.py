@@ -22,6 +22,7 @@ from app.workers.analytics import (
     dispatch_event,
     process_attendance_event,
     process_event,
+    process_feedback_event,
 )
 
 
@@ -31,6 +32,7 @@ class FakeRepo(AnalyticsRepository):
 
     fact_events: dict[int, dict] = field(default_factory=dict)
     fact_attendance_events: dict[int, dict] = field(default_factory=dict)
+    fact_feedback_events: dict[int, dict] = field(default_factory=dict)
     agg_subject_calls: list[tuple[str, str, str]] = field(default_factory=list)
     agg_overall_calls: list[tuple[str, str]] = field(default_factory=list)
 
@@ -44,6 +46,12 @@ class FakeRepo(AnalyticsRepository):
         if event_id in self.fact_attendance_events:
             return False
         self.fact_attendance_events[event_id] = payload
+        return True
+
+    async def insert_fact_feedback(self, *, event_id: int, payload: dict) -> bool:
+        if event_id in self.fact_feedback_events:
+            return False
+        self.fact_feedback_events[event_id] = payload
         return True
 
     async def recompute_agg_subject(
@@ -237,7 +245,82 @@ async def test_dispatch_event_routes_attendance_topic_to_attendance_handler():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_event_routes_feedback_topic_to_feedback_handler():
+    repo = FakeRepo()
+    p = _feedback_payload(event_id=900)
+
+    await dispatch_event(p, repo=repo, topic="feedback_events")
+
+    assert 900 in repo.fact_feedback_events
+    assert repo.fact_events == {}
+    assert repo.fact_attendance_events == {}
+
+
+@pytest.mark.asyncio
 async def test_dispatch_event_rejects_unknown_topic():
     repo = FakeRepo()
     with pytest.raises(ValueError):
         await dispatch_event({"event_id": 1}, repo=repo, topic="bogus_events")
+
+
+# ---------------------------------------------------------------------------
+# Feedback event handler (SMS-79)
+# ---------------------------------------------------------------------------
+
+
+def _feedback_payload(**overrides) -> dict:
+    base = {
+        "event_id": 1001,
+        "feedback_id": str(uuid.uuid4()),
+        "student_id": str(uuid.uuid4()),
+        "semester_id": str(uuid.uuid4()),
+        "category": "attitude",
+        "op": "INSERT",
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.asyncio
+async def test_process_feedback_event_inserts_fact_and_recomputes_overall():
+    repo = FakeRepo()
+    p = _feedback_payload()
+
+    await process_feedback_event(p, repo=repo)
+
+    assert repo.fact_feedback_events[1001]["category"] == "attitude"
+    assert repo.agg_overall_calls == [(p["student_id"], p["semester_id"])]
+    assert repo.agg_subject_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_feedback_event_handles_delete_op():
+    repo = FakeRepo()
+    p = _feedback_payload(event_id=1100, op="DELETE")
+
+    await process_feedback_event(p, repo=repo)
+
+    assert repo.fact_feedback_events[1100]["op"] == "DELETE"
+    assert len(repo.agg_overall_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_process_feedback_event_idempotent_on_duplicate_event_id():
+    repo = FakeRepo()
+    p = _feedback_payload(event_id=1200)
+
+    await process_feedback_event(p, repo=repo)
+    await process_feedback_event(p, repo=repo)
+
+    assert len(repo.fact_feedback_events) == 1
+    assert len(repo.agg_overall_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_process_feedback_event_raises_on_missing_field():
+    repo = FakeRepo()
+    p = _feedback_payload()
+    del p["semester_id"]
+
+    with pytest.raises(KeyError):
+        await process_feedback_event(p, repo=repo)
