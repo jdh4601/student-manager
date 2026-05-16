@@ -9,8 +9,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.errors import AppException
 from app.models.class_ import Class
 from app.models.counseling import Counseling
+from app.models.outbox import Outbox
 from app.models.student import Student
 from app.models.user import User
+
+
+COUNSELING_EVENTS_TOPIC = "counseling_events"
+
+
+def _counseling_outbox_row(cs: Counseling, *, op: str) -> Outbox:
+    payload = {
+        "counseling_id": str(cs.id),
+        "student_id": str(cs.student_id),
+        "teacher_id": str(cs.teacher_id),
+        "date": cs.date.isoformat(),
+        "op": op,
+    }
+    return Outbox(
+        aggregate_type="counseling",
+        aggregate_id=cs.id,
+        topic=COUNSELING_EVENTS_TOPIC,
+        payload=payload,
+    )
 
 
 async def _student_with_class(db: AsyncSession, student_id: uuid.UUID):
@@ -45,6 +65,8 @@ async def create_counseling(
         is_shared=is_shared,
     )
     db.add(cs)
+    await db.flush()  # populate cs.id before staging outbox row
+    db.add(_counseling_outbox_row(cs, op="INSERT"))
     await db.commit()
     await db.refresh(cs)
     return cs
@@ -71,6 +93,7 @@ async def update_counseling(
         cs.next_plan = next_plan
     if is_shared is not None:
         cs.is_shared = is_shared
+    db.add(_counseling_outbox_row(cs, op="UPDATE"))
     await db.commit()
     await db.refresh(cs)
     return cs

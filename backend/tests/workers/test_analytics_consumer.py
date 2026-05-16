@@ -18,9 +18,11 @@ import pytest
 
 from app.workers.analytics import (
     AnalyticsRepository,
+    PoisonMessageError,
     decode_record,
     dispatch_event,
     process_attendance_event,
+    process_counseling_event,
     process_event,
     process_feedback_event,
 )
@@ -33,8 +35,10 @@ class FakeRepo(AnalyticsRepository):
     fact_events: dict[int, dict] = field(default_factory=dict)
     fact_attendance_events: dict[int, dict] = field(default_factory=dict)
     fact_feedback_events: dict[int, dict] = field(default_factory=dict)
+    fact_counseling_events: dict[int, dict] = field(default_factory=dict)
     agg_subject_calls: list[tuple[str, str, str]] = field(default_factory=list)
     agg_overall_calls: list[tuple[str, str]] = field(default_factory=list)
+    dead_letters: list[dict] = field(default_factory=list)
 
     async def insert_fact_event(self, *, event_id: int, payload: dict) -> bool:
         if event_id in self.fact_events:
@@ -53,6 +57,31 @@ class FakeRepo(AnalyticsRepository):
             return False
         self.fact_feedback_events[event_id] = payload
         return True
+
+    async def insert_fact_counseling(self, *, event_id: int, payload: dict) -> bool:
+        if event_id in self.fact_counseling_events:
+            return False
+        self.fact_counseling_events[event_id] = payload
+        return True
+
+    async def record_dead_letter(
+        self,
+        *,
+        topic: str,
+        partition: int | None,
+        offset: int | None,
+        raw_value: bytes,
+        error: str,
+    ) -> None:
+        self.dead_letters.append(
+            {
+                "topic": topic,
+                "partition": partition,
+                "offset": offset,
+                "raw_value": raw_value,
+                "error": error,
+            }
+        )
 
     async def recompute_agg_subject(
         self, *, student_id: str, subject_id: str, semester_id: str
@@ -324,3 +353,171 @@ async def test_process_feedback_event_raises_on_missing_field():
 
     with pytest.raises(KeyError):
         await process_feedback_event(p, repo=repo)
+
+
+# ---------------------------------------------------------------------------
+# Counseling event handler (SMS-80)
+# ---------------------------------------------------------------------------
+
+
+def _counseling_payload(**overrides) -> dict:
+    base = {
+        "event_id": 2001,
+        "counseling_id": str(uuid.uuid4()),
+        "student_id": str(uuid.uuid4()),
+        "teacher_id": str(uuid.uuid4()),
+        "date": "2026-05-16",
+        "op": "INSERT",
+    }
+    base.update(overrides)
+    return base
+
+
+@pytest.mark.asyncio
+async def test_process_counseling_event_inserts_fact_only_no_agg():
+    """Counseling has no agg projection — only fact_counseling_event."""
+    repo = FakeRepo()
+    p = _counseling_payload()
+
+    await process_counseling_event(p, repo=repo)
+
+    assert repo.fact_counseling_events[2001]["op"] == "INSERT"
+    assert repo.agg_overall_calls == []
+    assert repo.agg_subject_calls == []
+
+
+@pytest.mark.asyncio
+async def test_process_counseling_event_idempotent_on_duplicate_event_id():
+    repo = FakeRepo()
+    p = _counseling_payload(event_id=2100)
+
+    await process_counseling_event(p, repo=repo)
+    await process_counseling_event(p, repo=repo)
+
+    assert len(repo.fact_counseling_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_process_counseling_event_raises_on_missing_field():
+    repo = FakeRepo()
+    p = _counseling_payload()
+    del p["teacher_id"]
+
+    with pytest.raises(KeyError):
+        await process_counseling_event(p, repo=repo)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_event_routes_counseling_topic():
+    repo = FakeRepo()
+    p = _counseling_payload(event_id=2200)
+
+    await dispatch_event(p, repo=repo, topic="counseling_events")
+
+    assert 2200 in repo.fact_counseling_events
+
+
+# ---------------------------------------------------------------------------
+# Dead-letter / run() loop (SMS-80)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FakeRecord:
+    topic: str
+    value: bytes
+    offset: int = 0
+    partition: int = 0
+
+
+class FakeConsumer:
+    """Minimal AIOKafkaConsumer stand-in driven by a script of records."""
+
+    def __init__(self, records: list):
+        self._records = list(records)
+        self.started = False
+        self.stopped = False
+        self.committed_count = 0
+
+    async def start(self) -> None:
+        self.started = True
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+    async def getone(self):
+        if not self._records:
+            # Sleep forever — the test sets stop_event externally.
+            import asyncio as _a
+
+            await _a.sleep(3600)
+            raise AssertionError("unreachable")
+        return self._records.pop(0)
+
+    async def commit(self) -> None:
+        self.committed_count += 1
+
+
+@pytest.mark.asyncio
+async def test_run_loop_records_dead_letter_for_malformed_payload():
+    """A record that fails decode/dispatch must NOT block the consumer —
+    it routes to the dead-letter sink and the offset gets committed."""
+    import asyncio as _a
+    import json as _json
+
+    from app.workers import analytics as worker
+
+    good = FakeRecord(
+        topic="grade_events",
+        value=_json.dumps(_payload(event_id=3000)).encode("utf-8"),
+        offset=0,
+    )
+    poison = FakeRecord(topic="grade_events", value=b"not json at all", offset=1)
+    consumer = FakeConsumer([good, poison])
+
+    repo = FakeRepo()
+
+    class _SessionFactory:
+        def __call__(self):
+            return self
+
+        async def __aenter__(self):
+            return _FakeDb()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _FakeDb:
+        async def commit(self):
+            pass
+
+    stop = _a.Event()
+
+    async def stopper():
+        await _a.sleep(0.5)
+        stop.set()
+
+    _a.create_task(stopper())
+
+    await worker.run(
+        consumer=consumer,
+        session_factory=_SessionFactory(),
+        repo_builder=lambda _db: repo,
+        stop_event=stop,
+        backoff_initial=0.05,
+        backoff_max=0.1,
+        getone_timeout=0.1,
+    )
+
+    assert 3000 in repo.fact_events, "good message processed"
+    assert len(repo.dead_letters) == 1, "poison message recorded to DLQ"
+    assert repo.dead_letters[0]["topic"] == "grade_events"
+    assert repo.dead_letters[0]["raw_value"] == b"not json at all"
+    # Two commits — one per record (poison still commits to advance past it)
+    assert consumer.committed_count == 2
+
+
+def test_poison_message_error_is_distinguishable():
+    """Sanity: PoisonMessageError is a separate type from generic Exception
+    so the run() loop can route it differently from transient errors."""
+    assert issubclass(PoisonMessageError, Exception)

@@ -35,12 +35,20 @@ logger = logging.getLogger(__name__)
 GRADE_EVENTS_TOPIC = "grade_events"
 ATTENDANCE_EVENTS_TOPIC = "attendance_events"
 FEEDBACK_EVENTS_TOPIC = "feedback_events"
+COUNSELING_EVENTS_TOPIC = "counseling_events"
 SUBSCRIBED_TOPICS = (
     GRADE_EVENTS_TOPIC,
     ATTENDANCE_EVENTS_TOPIC,
     FEEDBACK_EVENTS_TOPIC,
+    COUNSELING_EVENTS_TOPIC,
 )
 CONSUMER_GROUP_ID = "analytics-worker"
+
+
+class PoisonMessageError(Exception):
+    """A message is permanently unprocessable — malformed JSON, missing
+    required fields, or an unknown topic. The consumer routes it to the
+    dead-letter table and commits the offset so it stops blocking."""
 
 
 REQUIRED_PAYLOAD_FIELDS = (
@@ -70,6 +78,15 @@ REQUIRED_FEEDBACK_PAYLOAD_FIELDS = (
     "op",
 )
 
+REQUIRED_COUNSELING_PAYLOAD_FIELDS = (
+    "event_id",
+    "counseling_id",
+    "student_id",
+    "teacher_id",
+    "date",
+    "op",
+)
+
 
 class AnalyticsRepository(Protocol):
     """Operations the consumer needs against the analytics schema.
@@ -96,6 +113,24 @@ class AnalyticsRepository(Protocol):
 
     async def insert_fact_feedback(self, *, event_id: int, payload: dict) -> bool:
         """Insert one row into analytics.fact_feedback_event (idempotent on event_id)."""
+
+    async def insert_fact_counseling(self, *, event_id: int, payload: dict) -> bool:
+        """Insert one row into analytics.fact_counseling_event (idempotent on event_id).
+
+        Counseling has no aggregate projection — this fact row is for
+        audit / future BI use only.
+        """
+
+    async def record_dead_letter(
+        self,
+        *,
+        topic: str,
+        partition: int | None,
+        offset: int | None,
+        raw_value: bytes,
+        error: str,
+    ) -> None:
+        """Persist a poison message into analytics.dead_letter_event."""
 
     async def recompute_agg_subject(
         self, *, student_id: str, subject_id: str, semester_id: str
@@ -195,6 +230,22 @@ async def process_feedback_event(payload: dict, *, repo: AnalyticsRepository) ->
     )
 
 
+async def process_counseling_event(payload: dict, *, repo: AnalyticsRepository) -> None:
+    """Apply one counseling_events payload to the analytics schema.
+
+    Counseling has no aggregate projection (Design Spec §9.1) — we only
+    store the fact row for audit / future BI. INSERT is idempotent on event_id.
+    """
+    for field_name in REQUIRED_COUNSELING_PAYLOAD_FIELDS:
+        if field_name not in payload:
+            raise KeyError(
+                f"counseling_events payload missing required field: {field_name}"
+            )
+
+    event_id = int(payload["event_id"])
+    await repo.insert_fact_counseling(event_id=event_id, payload=payload)
+
+
 async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
     """Route a Kafka record to the right per-topic handler."""
     if topic == GRADE_EVENTS_TOPIC:
@@ -203,6 +254,8 @@ async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str
         await process_attendance_event(payload, repo=repo)
     elif topic == FEEDBACK_EVENTS_TOPIC:
         await process_feedback_event(payload, repo=repo)
+    elif topic == COUNSELING_EVENTS_TOPIC:
+        await process_counseling_event(payload, repo=repo)
     else:
         raise ValueError(f"no handler registered for topic={topic!r}")
 
@@ -301,6 +354,62 @@ class PostgresAnalyticsRepo:
             },
         )
         return (result.rowcount or 0) > 0
+
+    async def insert_fact_counseling(self, *, event_id: int, payload: dict) -> bool:
+        from sqlalchemy import text
+
+        stmt = text(
+            """
+            INSERT INTO analytics.fact_counseling_event
+                (event_id, counseling_id, student_id, teacher_id,
+                 date, op, occurred_at)
+            VALUES
+                (:event_id, :counseling_id, :student_id, :teacher_id,
+                 :date, :op, now())
+            ON CONFLICT (event_id) DO NOTHING
+            """
+        )
+        result = await self._db.execute(
+            stmt,
+            {
+                "event_id": event_id,
+                "counseling_id": payload["counseling_id"],
+                "student_id": payload["student_id"],
+                "teacher_id": payload["teacher_id"],
+                "date": payload["date"],
+                "op": payload["op"],
+            },
+        )
+        return (result.rowcount or 0) > 0
+
+    async def record_dead_letter(
+        self,
+        *,
+        topic: str,
+        partition: int | None,
+        offset: int | None,
+        raw_value: bytes,
+        error: str,
+    ) -> None:
+        from sqlalchemy import text
+
+        stmt = text(
+            """
+            INSERT INTO analytics.dead_letter_event
+                (topic, partition, offset_, raw_value, error, occurred_at)
+            VALUES (:topic, :partition, :offset_, :raw_value, :error, now())
+            """
+        )
+        await self._db.execute(
+            stmt,
+            {
+                "topic": topic,
+                "partition": partition,
+                "offset_": offset,
+                "raw_value": raw_value,
+                "error": error,
+            },
+        )
 
     async def recompute_agg_subject(
         self, *, student_id: str, subject_id: str, semester_id: str
@@ -486,13 +595,46 @@ async def run(
                 continue
 
             try:
-                payload = decode_record(record.value)
+                try:
+                    payload = decode_record(record.value)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    raise PoisonMessageError(f"decode failed: {exc}") from exc
                 async with session_factory() as db:
                     repo = repo_builder(db)
-                    await dispatch_event(payload, repo=repo, topic=record.topic)
+                    try:
+                        await dispatch_event(payload, repo=repo, topic=record.topic)
+                    except (KeyError, ValueError) as exc:
+                        raise PoisonMessageError(f"dispatch failed: {exc}") from exc
                     await db.commit()
                 await consumer.commit()
                 backoff = backoff_initial
+            except PoisonMessageError as exc:
+                logger.warning(
+                    "poison message at offset=%s topic=%s: %s",
+                    getattr(record, "offset", "?"),
+                    getattr(record, "topic", "?"),
+                    exc,
+                )
+                try:
+                    async with session_factory() as db:
+                        repo = repo_builder(db)
+                        await repo.record_dead_letter(
+                            topic=getattr(record, "topic", ""),
+                            partition=getattr(record, "partition", None),
+                            offset=getattr(record, "offset", None),
+                            raw_value=record.value,
+                            error=str(exc),
+                        )
+                        await db.commit()
+                    await consumer.commit()
+                    backoff = backoff_initial
+                except Exception:
+                    logger.exception(
+                        "failed to record dead letter for offset=%s — will retry",
+                        getattr(record, "offset", "?"),
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, backoff_max)
             except Exception:
                 logger.exception(
                     "failed to process record offset=%s — offset will not be committed",
