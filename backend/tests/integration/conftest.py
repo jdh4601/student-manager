@@ -111,6 +111,10 @@ async def clean_pipeline_tables(session_factory: async_sessionmaker[AsyncSession
     async with session_factory() as db:
         await db.execute(text("TRUNCATE TABLE public.outbox CASCADE"))
         await db.execute(text("TRUNCATE TABLE analytics.fact_grade_event CASCADE"))
+        await db.execute(text("TRUNCATE TABLE analytics.fact_attendance_event CASCADE"))
+        await db.execute(text("TRUNCATE TABLE analytics.fact_feedback_event CASCADE"))
+        await db.execute(text("TRUNCATE TABLE analytics.fact_counseling_event CASCADE"))
+        await db.execute(text("TRUNCATE TABLE analytics.dead_letter_event"))
         await db.execute(text("TRUNCATE TABLE analytics.agg_student_subject"))
         await db.execute(text("TRUNCATE TABLE analytics.agg_student_overall"))
         await db.commit()

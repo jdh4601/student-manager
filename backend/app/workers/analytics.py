@@ -301,6 +301,7 @@ class PostgresAnalyticsRepo:
         return (result.rowcount or 0) > 0
 
     async def insert_fact_attendance(self, *, event_id: int, payload: dict) -> bool:
+        from datetime import date as _date
         from sqlalchemy import text
 
         stmt = text(
@@ -321,7 +322,7 @@ class PostgresAnalyticsRepo:
                 "attendance_id": payload["attendance_id"],
                 "student_id": payload["student_id"],
                 "semester_id": payload["semester_id"],
-                "date": payload["date"],
+                "date": _date.fromisoformat(payload["date"]),
                 "status": payload["status"],
                 "op": payload["op"],
             },
@@ -356,6 +357,7 @@ class PostgresAnalyticsRepo:
         return (result.rowcount or 0) > 0
 
     async def insert_fact_counseling(self, *, event_id: int, payload: dict) -> bool:
+        from datetime import date as _date
         from sqlalchemy import text
 
         stmt = text(
@@ -376,7 +378,7 @@ class PostgresAnalyticsRepo:
                 "counseling_id": payload["counseling_id"],
                 "student_id": payload["student_id"],
                 "teacher_id": payload["teacher_id"],
-                "date": payload["date"],
+                "date": _date.fromisoformat(payload["date"]),
                 "op": payload["op"],
             },
         )
@@ -637,8 +639,9 @@ async def run(
                     backoff = min(backoff * 2, backoff_max)
             except Exception:
                 logger.exception(
-                    "failed to process record offset=%s — offset will not be committed",
+                    "failed to process record offset=%s topic=%s — offset will not be committed",
                     getattr(record, "offset", "?"),
+                    getattr(record, "topic", "?"),
                 )
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, backoff_max)
