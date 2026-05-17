@@ -1514,14 +1514,17 @@ ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
 
 ### 9.6 일관성 보장
 
-| 항목 | 정책 |
-|------|------|
-| 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (Kafka 발행 + consumer 처리는 통상 sub-second) |
-| 정합성 검증 | 통합 테스트(testcontainers) + `scripts/check_consistency.py` (운영 row vs fact row 비교) |
-| Publisher 다운 | outbox row commit됨 → 부팅 시 `WHERE sent_at IS NULL` 자동 catch-up |
-| Consumer 다운 | Kafka offset 보관 → 재기동 시 마지막 commit offset부터 재구독 |
-| Broker 다운 | publisher가 producer.send에서 retry. 운영 트랜잭션은 정상 commit (outbox row 누적) |
-| 백필 | Alembic data migration 스크립트 (`scripts/backfill_analytics.py`): 운영 테이블 전체 스캔 → outbox INSERT (publisher가 catch-up) |
+| 항목 | 정책 | 검증 |
+|------|------|------|
+| 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (Kafka 발행 + consumer 처리는 통상 sub-second) | `test_pipeline_propagates_grade_event_within_sla` (SMS-54) |
+| 정합성 검증 | testcontainers 통합 테스트 + `scripts/check_consistency.py` (운영 row vs fact row 비교) | `tests/integration/*` (Sprint 1·2) |
+| Idempotency (중복 메시지) | 모든 fact 테이블이 `event_id` PK + `ON CONFLICT DO NOTHING`. consumer가 no-op 감지 시 agg recompute skip → fact rowcount·agg 값 모두 불변 | `test_idempotency_e2e.py` 5개 시나리오 (SMS-81) |
+| Publisher 다운 | outbox row commit됨 → 부팅 시 `WHERE sent_at IS NULL` 자동 catch-up | `test_publisher_drains_backlog_after_late_start` (SMS-54) |
+| Consumer 다운 | Kafka offset 보관 → 재기동 시 마지막 commit offset부터 재구독, 이벤트 누락 0 | `test_consumer_resumes_after_restart_without_loss` (SMS-54) |
+| Broker 다운 | publisher가 producer.send에서 retry. 운영 트랜잭션은 정상 commit (outbox row 누적) | SMS-52 catch-up 단위 테스트 |
+| Poison message | decode 실패 / 필수 필드 누락 / 알 수 없는 topic → `analytics.dead_letter_event` 기록 + offset commit. main consumer는 차단되지 않음 | `test_malformed_payload_routes_to_dead_letter_table` (SMS-81) |
+| Transient error (DB 일시 오류 등) | offset commit 안 함 + exponential backoff. 다음 iteration에서 재시도 | run() 루프 코드 |
+| 백필 | Alembic data migration 스크립트 (`scripts/backfill_analytics.py`): 운영 테이블 전체 스캔 → outbox INSERT (publisher가 catch-up) | (구현 예정) |
 
 ---
 

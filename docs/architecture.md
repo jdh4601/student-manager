@@ -96,10 +96,13 @@
 │  └────────┬─────────┘                                                 │
 │           │ consume                                                   │
 │           ▼                                                           │
-│  ┌──────────────────────────┐                                         │
-│  │ analytics-worker         │  scale=N (consumer group)               │
-│  │ (aiokafka consumer)      │                                         │
-│  └──────────────────────────┘                                         │
+│  ┌──────────────────────────────────────────┐                         │
+│  │ analytics-worker                         │  scale=N (consumer group)│
+│  │ (aiokafka consumer + topic dispatch)     │                         │
+│  │  ├─ fact_*_event INSERT ON CONFLICT       (idempotent on event_id) │
+│  │  ├─ agg_student_* UPSERT                                           │
+│  │  └─ dead_letter_event ← poison messages   (offset committed)       │
+│  └──────────────────────────────────────────┘                         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -195,8 +198,9 @@ Teacher                fastapi-api : routers/chat.py     analytics 스키마    
 | fastapi-api | Postgres `public.outbox` | SQL INSERT (같은 TX) | JSON payload | latency 영향 ≤ 5ms |
 | outbox-publisher | Postgres | SQL (poll + UPDATE) | event row | poll 주기 0.5s |
 | outbox-publisher | Kafka | producer.send_and_wait | bytes (JSON) | 발행까지 ≤ 1s (정상) |
-| Kafka | analytics-worker | consumer poll | bytes (JSON) | sub-second |
-| analytics-worker | Postgres `analytics` | SQL UPSERT | 집계 row | best-effort, end-to-end ≤ 1분 |
+| Kafka | analytics-worker | consumer poll (4 topics: grade/attendance/feedback/counseling) | bytes (JSON) | sub-second |
+| analytics-worker | Postgres `analytics` | SQL INSERT ON CONFLICT + UPSERT | fact + agg row | best-effort, end-to-end ≤ 1분 |
+| analytics-worker | Postgres `analytics.dead_letter_event` | SQL INSERT (poison message) | raw bytes + error | only on permanent failure |
 | Browser | fastapi-api `/chat` | HTTP REST | { thread_id, message } | p95 ≤ 3s |
 | fastapi-api | LLM Provider | HTTPS | masked context + prompt | timeout 10s |
 
