@@ -20,6 +20,7 @@ from app.routers import notifications
 from app.routers import students
 from app.routers import imports
 from app.routers import my
+from app.routers import analytics
 
 
 
@@ -79,3 +80,4 @@ app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(students.router, prefix="/api/v1")
 app.include_router(imports.router, prefix="/api/v1")
 app.include_router(my.router, prefix="/api/v1")
+app.include_router(analytics.router, prefix="/api/v1")
