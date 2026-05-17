@@ -14,7 +14,10 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies.analytics import get_student_overview_repo
+from app.dependencies.analytics import (
+    get_class_distribution_repo,
+    get_student_overview_repo,
+)
 from app.dependencies.auth import require_role
 from app.dependencies.db import get_db
 from app.errors import AppException
@@ -22,11 +25,18 @@ from app.models.class_ import Class
 from app.models.student import Student
 from app.models.user import User
 from app.schemas.analytics import (
+    ClassDistributionResponse,
+    DistributionBucket,
     OverallSummary,
     StudentOverviewResponse,
     SubjectOverview,
 )
-from app.services.analytics_query import StudentOverviewRepo
+from app.services.analytics_query import (
+    ClassDistributionRepo,
+    StudentOverviewRepo,
+    bucketize,
+    median,
+)
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -77,4 +87,47 @@ async def get_student_overview(
             )
             for s in subjects
         ],
+    )
+
+
+async def _assert_teacher_owns_class(
+    db: AsyncSession, *, class_id: uuid.UUID, teacher: User
+) -> None:
+    result = await db.execute(select(Class).where(Class.id == class_id))
+    cls = result.scalar_one_or_none()
+    if cls is None:
+        raise AppException(404, "Class not found", "CLASS_NOT_FOUND")
+    if cls.school_id != teacher.school_id or cls.teacher_id != teacher.id:
+        raise AppException(403, "권한이 부족합니다.", "FORBIDDEN")
+
+
+@router.get(
+    "/classes/{class_id}/distribution",
+    response_model=ClassDistributionResponse,
+)
+async def get_class_distribution(
+    class_id: str,
+    subject_id: str = Query(...),
+    semester_id: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("teacher")),
+    repo: ClassDistributionRepo = Depends(get_class_distribution_repo),
+) -> ClassDistributionResponse:
+    cid = uuid.UUID(class_id)
+    sub = uuid.UUID(subject_id)
+    sem = uuid.UUID(semester_id) if semester_id else None
+
+    await _assert_teacher_owns_class(db, class_id=cid, teacher=current_user)
+
+    scores = await repo.get_student_avg_scores(
+        class_id=cid, subject_id=sub, semester_id=sem
+    )
+
+    buckets = [DistributionBucket(**b) for b in bucketize(scores)]
+    mean = sum(scores) / len(scores) if scores else None
+    return ClassDistributionResponse(
+        buckets=buckets,
+        total_students=len(scores),
+        mean=mean,
+        median=median(scores),
     )

@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.db import get_db
 from app.services.analytics_query import (
+    ClassDistributionRepo,
+    PostgresClassDistributionRepo,
     PostgresStudentOverviewRepo,
     StudentOverviewRepo,
 )
@@ -19,3 +21,9 @@ def get_student_overview_repo(
     db: AsyncSession = Depends(get_db),
 ) -> StudentOverviewRepo:
     return PostgresStudentOverviewRepo(db)
+
+
+def get_class_distribution_repo(
+    db: AsyncSession = Depends(get_db),
+) -> ClassDistributionRepo:
+    return PostgresClassDistributionRepo(db)

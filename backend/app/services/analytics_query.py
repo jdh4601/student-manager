@@ -139,3 +139,79 @@ def _to_float(v) -> float | None:
     if v is None:
         return None
     return float(v)
+
+
+class ClassDistributionRepo(Protocol):
+    async def get_student_avg_scores(
+        self,
+        *,
+        class_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        semester_id: uuid.UUID | None,
+    ) -> list[float]: ...
+
+
+class PostgresClassDistributionRepo:
+    def __init__(self, db: AsyncSession):
+        self._db = db
+
+    async def get_student_avg_scores(
+        self,
+        *,
+        class_id: uuid.UUID,
+        subject_id: uuid.UUID,
+        semester_id: uuid.UUID | None,
+    ) -> list[float]:
+        where = (
+            "WHERE s.class_id = :class_id "
+            "AND a.subject_id = :subject_id "
+            "AND a.avg_score IS NOT NULL"
+        )
+        params: dict = {"class_id": str(class_id), "subject_id": str(subject_id)}
+        if semester_id is not None:
+            where += " AND a.semester_id = :semester_id"
+            params["semester_id"] = str(semester_id)
+        stmt = text(
+            f"""
+            SELECT a.avg_score
+            FROM analytics.agg_student_subject a
+            JOIN public.students s ON s.id = a.student_id
+            {where}
+            """
+        )
+        result = await self._db.execute(stmt, params)
+        return [float(row[0]) for row in result.all()]
+
+
+BUCKET_RANGES: tuple[tuple[int, int], ...] = tuple((lo, lo + 9) for lo in range(0, 100, 10))
+
+
+def bucket_label(lo: int, hi: int) -> str:
+    """Render a bucket range as ``"0-9"`` … ``"90-100"``.
+
+    The top bucket includes 100 (10-point bins, scores are 0-100 inclusive).
+    """
+    return f"{lo}-{100 if lo == 90 else hi}"
+
+
+def bucketize(scores: list[float]) -> list[dict]:
+    """Bin scores into 10-point buckets. The 90-100 bucket includes 100."""
+    counts = [0] * len(BUCKET_RANGES)
+    for s in scores:
+        idx = min(int(s // 10), len(BUCKET_RANGES) - 1)
+        counts[idx] += 1
+    return [
+        {"range": bucket_label(lo, hi), "count": counts[i]}
+        for i, (lo, hi) in enumerate(BUCKET_RANGES)
+    ]
+
+
+def median(scores: list[float]) -> float | None:
+    if not scores:
+        return None
+    s = sorted(scores)
+    n = len(s)
+    mid = n // 2
+    if n % 2 == 1:
+        return float(s[mid])
+    return (s[mid - 1] + s[mid]) / 2

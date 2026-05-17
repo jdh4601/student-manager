@@ -36,3 +36,15 @@ class SubjectOverview(BaseModel):
 class StudentOverviewResponse(BaseModel):
     overall: OverallSummary | None
     subjects: list[SubjectOverview]
+
+
+class DistributionBucket(BaseModel):
+    range: str
+    count: int
+
+
+class ClassDistributionResponse(BaseModel):
+    buckets: list[DistributionBucket]
+    total_students: int
+    mean: float | None
+    median: float | None
