@@ -215,3 +215,58 @@ def median(scores: list[float]) -> float | None:
     if n % 2 == 1:
         return float(s[mid])
     return (s[mid - 1] + s[mid]) / 2
+
+
+@dataclass(frozen=True)
+class ClassAggregate:
+    class_id: uuid.UUID
+    avg_score: float | None
+    attendance_rate: float | None
+
+
+class TeacherDashboardRepo(Protocol):
+    async def get_class_aggregates(
+        self,
+        *,
+        class_ids: list[uuid.UUID],
+        semester_id: uuid.UUID | None,
+    ) -> list[ClassAggregate]: ...
+
+
+class PostgresTeacherDashboardRepo:
+    def __init__(self, db: AsyncSession):
+        self._db = db
+
+    async def get_class_aggregates(
+        self,
+        *,
+        class_ids: list[uuid.UUID],
+        semester_id: uuid.UUID | None,
+    ) -> list[ClassAggregate]:
+        if not class_ids:
+            return []
+        where = "WHERE s.class_id = ANY(:class_ids)"
+        params: dict = {"class_ids": [str(c) for c in class_ids]}
+        if semester_id is not None:
+            where += " AND a.semester_id = :semester_id"
+            params["semester_id"] = str(semester_id)
+        stmt = text(
+            f"""
+            SELECT s.class_id,
+                   avg(a.avg_score)               AS avg_score,
+                   avg(a.attendance_present_rate) AS attendance_rate
+            FROM analytics.agg_student_overall a
+            JOIN public.students s ON s.id = a.student_id
+            {where}
+            GROUP BY s.class_id
+            """
+        )
+        result = await self._db.execute(stmt, params)
+        return [
+            ClassAggregate(
+                class_id=uuid.UUID(str(row["class_id"])),
+                avg_score=_to_float(row["avg_score"]),
+                attendance_rate=_to_float(row["attendance_rate"]),
+            )
+            for row in result.mappings().all()
+        ]

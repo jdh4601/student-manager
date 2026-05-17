@@ -13,7 +13,9 @@ from app.services.analytics_query import (
     ClassDistributionRepo,
     PostgresClassDistributionRepo,
     PostgresStudentOverviewRepo,
+    PostgresTeacherDashboardRepo,
     StudentOverviewRepo,
+    TeacherDashboardRepo,
 )
 
 
@@ -27,3 +29,9 @@ def get_class_distribution_repo(
     db: AsyncSession = Depends(get_db),
 ) -> ClassDistributionRepo:
     return PostgresClassDistributionRepo(db)
+
+
+def get_teacher_dashboard_repo(
+    db: AsyncSession = Depends(get_db),
+) -> TeacherDashboardRepo:
+    return PostgresTeacherDashboardRepo(db)

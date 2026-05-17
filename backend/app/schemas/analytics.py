@@ -48,3 +48,17 @@ class ClassDistributionResponse(BaseModel):
     total_students: int
     mean: float | None
     median: float | None
+
+
+class TeacherDashboardClass(BaseModel):
+    class_id: str
+    name: str
+    student_count: int
+    avg_score: float | None
+    attendance_rate: float | None
+
+
+class TeacherDashboardResponse(BaseModel):
+    classes: list[TeacherDashboardClass]
+    recent_feedbacks_count: int
+    pending_counselings_count: int
