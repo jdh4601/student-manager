@@ -1256,11 +1256,40 @@ CREATE TABLE analytics.fact_attendance_event (
   event_id      BIGSERIAL PRIMARY KEY,
   attendance_id UUID NOT NULL,
   student_id    UUID NOT NULL,
+  semester_id   UUID,                  -- SMS-78: outbox publisher가 resolve해 채움 (nullable, 백필 여유)
   date          DATE NOT NULL,
   status        VARCHAR(15) NOT NULL,
   op            VARCHAR(10) NOT NULL,
   occurred_at   TIMESTAMP NOT NULL DEFAULT now()
 );
+CREATE INDEX ix_fact_attendance_event_student_semester
+  ON analytics.fact_attendance_event (student_id, semester_id);
+
+CREATE TABLE analytics.fact_feedback_event (
+  event_id      BIGSERIAL PRIMARY KEY,
+  feedback_id   UUID NOT NULL,
+  student_id    UUID NOT NULL,
+  semester_id   UUID,
+  category      VARCHAR(15),           -- score | behavior | attendance | attitude
+  op            VARCHAR(10) NOT NULL,  -- INSERT | UPDATE | DELETE
+  occurred_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_fact_feedback_event_student_semester
+  ON analytics.fact_feedback_event (student_id, semester_id);
+CREATE INDEX ix_fact_feedback_event_feedback
+  ON analytics.fact_feedback_event (feedback_id, occurred_at DESC);
+
+CREATE TABLE analytics.fact_counseling_event (
+  event_id      BIGSERIAL PRIMARY KEY,
+  counseling_id UUID NOT NULL,
+  student_id    UUID NOT NULL,
+  teacher_id    UUID NOT NULL,
+  date          DATE,
+  op            VARCHAR(10) NOT NULL,  -- INSERT | UPDATE
+  occurred_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_fact_counseling_event_student
+  ON analytics.fact_counseling_event (student_id, occurred_at DESC);
 
 -- 집계 캐시 (UPSERT, consumer가 갱신)
 CREATE TABLE analytics.agg_student_subject (
@@ -1287,35 +1316,55 @@ CREATE TABLE analytics.agg_student_overall (
   refreshed_at   TIMESTAMP NOT NULL DEFAULT now(),
   PRIMARY KEY (student_id, semester_id)
 );
+
+-- Dead-letter sink (SMS-80): poison 메시지(decode 실패 / 필수 필드 누락 / 알 수 없는 topic)는
+-- 이 테이블에 기록 후 consumer offset commit. transient error(DB 일시 오류 등)는 commit 안 함.
+CREATE TABLE analytics.dead_letter_event (
+  id           BIGSERIAL PRIMARY KEY,
+  topic        VARCHAR(50) NOT NULL,
+  partition    INTEGER,
+  offset_      BIGINT,
+  raw_value    BYTEA,
+  error        TEXT NOT NULL,
+  occurred_at  TIMESTAMP NOT NULL DEFAULT now()
+);
 ```
+
+**Counseling은 집계 미반영**: counseling 이벤트는 `fact_counseling_event`에 audit 목적으로만 기록되며 `agg_student_overall`에 영향 없음. 향후 BI 요구가 생기면 별도 agg 테이블 추가.
+
+**Semester 바인딩 주의**: `Semester` 모델은 (year, term)만 가지며 date range가 없어 `Attendance`/`Feedback`을 의미적으로 매핑할 수 없다. v2.1에선 operational 라우터가 outbox INSERT 시점에 "가장 최근 (year DESC, term DESC) 학기"를 resolve해 payload·fact row에 박는다 (`app/services/semester.py:current_semester_id`). 의미적 정확도가 필요하면 향후 `Semester`에 date range 컬럼 추가 또는 `Attendance`/`Feedback`에 직접 FK 부여 필요.
 
 ### 9.2 운영 라우터의 Outbox INSERT (트랜잭션 일관성)
 
 운영 도메인 변경(예: grade UPSERT) 직후 **같은 트랜잭션** 안에서 `public.outbox`에 row를 INSERT한다. 이로써 도메인 변경이 commit되면 outbox row도 반드시 함께 영속화되며, broker가 다운돼도 이벤트가 유실되지 않는다.
 
 ```python
-# app/services/grades.py — pseudo
-async def upsert_grade(db: AsyncSession, *, student_id: UUID, ...) -> Grade:
-    async with db.begin():
-        grade = await _upsert_grade_row(db, student_id=student_id, ...)
-        await db.execute(
-            insert(Outbox).values(
-                aggregate_type="grade",
-                aggregate_id=grade.id,
-                topic="grade_events",
-                payload={
-                    "grade_id": str(grade.id),
-                    "student_id": str(student_id),
-                    "subject_id": str(grade.subject_id),
-                    "semester_id": str(grade.semester_id),
-                    "op": "UPSERT",
-                },
-            )
-        )
+# app/services/grade.py — pseudo
+async def create_grade(db: AsyncSession, *, student_id: UUID, ...) -> Grade:
+    grade = Grade(student_id=student_id, ...)
+    db.add(grade)
+    await db.flush()  # grade.id 채워야 outbox row의 aggregate_id로 사용 가능
+    db.add(Outbox(
+        aggregate_type="grade",
+        aggregate_id=grade.id,
+        topic="grade_events",
+        payload={
+            "grade_id": str(grade.id),
+            "student_id": str(student_id),
+            "subject_id": str(grade.subject_id),
+            "semester_id": str(grade.semester_id),
+            "score": float(grade.score) if grade.score is not None else None,
+            "grade_rank": grade.grade_rank,
+            "op": "INSERT",  # update_grade는 "UPDATE", delete는 "DELETE"
+        },
+    ))
+    await db.commit()
     return grade
 ```
 
-`attendance`, `feedback`, `counseling` 라우터에서 동일한 패턴 적용.
+`attendance`, `feedback`, `counseling` 라우터에서 동일한 패턴 적용. `op` 값은 도메인 작업 종류 그대로 (`INSERT`/`UPDATE`/`DELETE`).
+
+**event_id envelope**: outbox row의 `event_id`는 publisher가 publish 직전에 payload에 주입한다 (`{**row.payload, "event_id": row.event_id}`). consumer는 이 값을 PK로 사용해 `INSERT ... ON CONFLICT (event_id) DO NOTHING`으로 idempotency를 보장. 운영 라우터는 outbox row를 만들 때만 책임지고 event_id 주입은 신경 쓰지 않는다.
 
 ### 9.3 Outbox Publisher (Kafka producer)
 
@@ -1351,33 +1400,106 @@ async def main() -> None:
 
 ### 9.4 Analytics Worker (Kafka consumer)
 
+단일 worker 프로세스가 4개 topic을 구독하고 record의 `topic` 필드로 핸들러를 dispatch한다.
+
 ```python
 # app/workers/analytics.py — pseudo
-async def main() -> None:
-    consumer = AIOKafkaConsumer(
-        "grade_events", "attendance_events", "feedback_events", "counseling_events",
-        bootstrap_servers=settings.KAFKA_BOOTSTRAP,
-        group_id="analytics-worker",
-        enable_auto_commit=False,
-        auto_offset_reset="earliest",
-    )
+SUBSCRIBED_TOPICS = (
+    "grade_events", "attendance_events", "feedback_events", "counseling_events",
+)
+
+
+async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
+    if topic == "grade_events":         await process_event(payload, repo=repo)
+    elif topic == "attendance_events":  await process_attendance_event(payload, repo=repo)
+    elif topic == "feedback_events":    await process_feedback_event(payload, repo=repo)
+    elif topic == "counseling_events":  await process_counseling_event(payload, repo=repo)
+    else:                               raise ValueError(f"unknown topic: {topic!r}")
+
+
+async def run(*, consumer, session_factory, ...):
     await consumer.start()
     try:
-        async for msg in consumer:
-            event = json.loads(msg.value.decode())
-            match msg.topic:
-                case "grade_events":      await refresh_grade_aggregates(event)
-                case "attendance_events": await refresh_attendance_aggregates(event)
-                case "feedback_events":   await refresh_feedback_aggregates(event)
-                case "counseling_events": await refresh_counseling_aggregates(event)
-            await consumer.commit()
+        while not stop_event.is_set():
+            record = await consumer.getone()
+            try:
+                try:
+                    payload = decode_record(record.value)  # raises ValueError on bad JSON
+                except (JSONDecodeError, ValueError) as exc:
+                    raise PoisonMessageError(f"decode failed: {exc}") from exc
+                async with session_factory() as db:
+                    repo = PostgresAnalyticsRepo(db)
+                    try:
+                        await dispatch_event(payload, repo=repo, topic=record.topic)
+                    except (KeyError, ValueError) as exc:
+                        raise PoisonMessageError(f"dispatch failed: {exc}") from exc
+                    await db.commit()
+                await consumer.commit()
+            except PoisonMessageError as exc:
+                # 영구 오류: dead_letter_event에 기록, offset commit해서 같은 메시지 무한 retry 회피
+                async with session_factory() as db:
+                    await PostgresAnalyticsRepo(db).record_dead_letter(
+                        topic=record.topic, partition=record.partition,
+                        offset=record.offset, raw_value=record.value, error=str(exc),
+                    )
+                    await db.commit()
+                await consumer.commit()
+            except Exception:
+                # transient: DB 일시 오류 등. offset commit 안 함 → 다음 iteration에서 같은 메시지 재시도
+                logger.exception("transient error; will retry")
+                await asyncio.sleep(backoff)
     finally:
         await consumer.stop()
 ```
 
-- **idempotency**: `analytics.fact_*`는 append-only지만 `(grade_id, op, occurred_at)` 등 dedupe key로 중복 방지. `analytics.agg_*`는 UPSERT.
-- **수평 확장**: `docker-compose up --scale analytics-worker=3` → consumer group이 자동으로 파티션 분배.
-- **error handling**: 실패 이벤트는 `analytics.dead_letter`에 기록 + 로그 알림.
+#### 핸들러 별 처리 매트릭스
+
+| Topic | Fact 테이블 | Agg 영향 |
+|---|---|---|
+| `grade_events` | `fact_grade_event` (INSERT ON CONFLICT) | `agg_student_subject` + `agg_student_overall` UPSERT |
+| `attendance_events` | `fact_attendance_event` | `agg_student_overall.attendance_present_rate` |
+| `feedback_events` | `fact_feedback_event` | `agg_student_overall.feedback_count` (DELETE op 제외) |
+| `counseling_events` | `fact_counseling_event` | (없음 — audit only) |
+
+#### Agg 재계산 패턴 (`recompute_agg_overall`)
+
+운영의 부분 변경(INSERT/UPDATE/DELETE)이 아니라 **현재 fact 상태로부터 항상 전체 재계산** 한다. UPDATE 이벤트가 fact를 중복으로 쌓는 문제는 `DISTINCT ON (<aggregate_id>) ORDER BY occurred_at DESC` CTE로 해결.
+
+```sql
+-- agg_student_overall은 grade/attendance/feedback 컬럼을 한 번에 UPSERT
+WITH latest_grades AS (
+  SELECT DISTINCT ON (grade_id) score
+  FROM analytics.fact_grade_event WHERE student_id=$1 AND semester_id=$2
+  ORDER BY grade_id, occurred_at DESC, event_id DESC
+),
+latest_attendance AS (...),
+latest_feedback AS (
+  SELECT DISTINCT ON (feedback_id) op
+  FROM analytics.fact_feedback_event WHERE student_id=$1 AND semester_id=$2
+  ORDER BY feedback_id, occurred_at DESC, event_id DESC
+)
+INSERT INTO analytics.agg_student_overall (...) VALUES (...)
+ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
+```
+
+#### Idempotency
+
+- 모든 fact 테이블이 `event_id` PK + `ON CONFLICT (event_id) DO NOTHING` → 중복 메시지 0 행 추가
+- consumer는 fact INSERT가 no-op(이미 처리됨)이면 agg recompute를 skip
+- 즉 동일 메시지가 N번 와도 fact rowcount·agg 값 모두 불변
+
+#### 수평 확장
+
+`docker-compose up --scale analytics-worker=3` → consumer group이 파티션 자동 분배. group_id가 동일하면 Kafka가 partition rebalance를 처리. 단, 각 (student_id, semester_id)에 대한 agg UPSERT는 동시 실행 가능성이 있어 row-level lock에 의존 — Postgres `ON CONFLICT DO UPDATE`는 자동 lock.
+
+#### Dead-Letter 정책
+
+| 에러 유형 | 처리 | offset commit |
+|---|---|---|
+| Permanent (decode 실패, 필수 필드 누락, 알 수 없는 topic) | `analytics.dead_letter_event` INSERT | ✅ commit (poison 메시지가 consumer를 무한 차단하지 않도록) |
+| Transient (DB 다운, 일시 네트워크 오류) | log + exponential backoff | ❌ no commit → 다음 iteration에서 재시도 |
+
+운영 측에선 `SELECT * FROM analytics.dead_letter_event ORDER BY occurred_at DESC` 로 poison 메시지를 검토 후 producer 측 수정 또는 수동 replay.
 
 ### 9.5 분석 API
 
@@ -1529,11 +1651,11 @@ Rate Limit: 10회/분 per user (slowapi)
 | REQ-061~062 | §3.9 (클라이언트 jsPDF) | ✅ |
 | REQ-005 | 비밀번호 재설정 | ✅ |
 | US-007 AC (알림 ON/OFF) | §3.8 NotificationPreference | ✅ |
-| REQ-070 (분석 스키마 분리) | §9.1 analytics.* | 🚧 v2.1 |
-| REQ-071 (Outbox + Kafka 이벤트 적재) | §9.2~9.4 outbox INSERT + publisher + consumer | 🚧 v2.1 |
-| REQ-072 (집계 테이블) | §9.1 agg_student_subject/overall | 🚧 v2.1 |
-| REQ-073 (교사 대시보드) | §9.5 GET /analytics/* | 🚧 v2.1 |
-| REQ-074 (≤ 1분 반영) | §9.6 일관성 보장 | 🚧 v2.1 |
+| REQ-070 (분석 스키마 분리) | §9.1 analytics.* (Sprint 1 SMS-49) | ✅ v2.1 |
+| REQ-071 (Outbox + Kafka 이벤트 적재) | §9.2~9.4 (Sprint 1 SMS-50~53, Sprint 2 SMS-78~80 4 도메인 확장) | ✅ v2.1 |
+| REQ-072 (집계 테이블) | §9.1 agg_student_subject/overall (Sprint 2에서 attendance_present_rate + feedback_count까지 채움) | ✅ v2.1 |
+| REQ-073 (교사 대시보드) | §9.5 GET /analytics/* | 🚧 v2.1 (Sprint 3 SMS-74) |
+| REQ-074 (≤ 1분 반영) | §9.6 + Sprint 1 SMS-54 + Sprint 2 SMS-81 e2e idempotency | ✅ v2.1 |
 | REQ-075 (scale=N 시연) | §1 docker-compose `--scale analytics-worker=3` | 🚧 v2.1 |
 | REQ-080~083 (AI 어시스턴트 단일 엔드포인트 + PII 마스킹) | §10 AI 어시스턴트 | 🚧 v2.1 |
 
