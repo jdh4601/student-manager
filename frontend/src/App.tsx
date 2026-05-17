@@ -20,6 +20,7 @@ const GradesPage = lazy(() => import('./pages/GradesPage'));
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage'));
 const CounselingPage = lazy(() => import('./pages/CounselingPage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
+const AnalyticsDashboardPage = lazy(() => import('./pages/AnalyticsDashboardPage'));
 
 function App() {
   return (
@@ -71,6 +72,7 @@ function App() {
               <Suspense fallback={<div className="p-4">불러오는 중...</div>}>
                 <Routes>
                   <Route path="/dashboard" element={<DashboardPage />} />
+                  <Route path="/analytics" element={<AnalyticsDashboardPage />} />
                   <Route path="/students" element={<StudentListPage />} />
                   <Route path="/students/:studentId" element={<StudentDetailPage />} />
                   <Route path="/grades/:studentId" element={<GradesPage />} />
