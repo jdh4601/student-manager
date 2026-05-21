@@ -29,8 +29,6 @@ docker compose exec backend python /scripts/demo_seed.py
 | 4 | 분산 처리 시연 | 새 터미널에서 `make demo-scale-logs` — 3개 워커가 파티션 분산 소비 |
 | 5 | 정리 | `make demo-scale-down` |
 
-스크린샷: 대시보드 [`docs/images/dashboard.png`](docs/images/dashboard.png) · 챗봇 [`docs/images/chat.png`](docs/images/chat.png)
-
 발표 시 상세 시나리오와 사고 대응:
 
 - 25분 발표 아웃라인: [`docs/notes/presentation-outline.md`](docs/notes/presentation-outline.md)
