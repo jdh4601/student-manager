@@ -56,6 +56,40 @@ npm run qa
 
 백엔드 `ruff` + `pytest`, 프론트엔드 `tsc --noEmit`을 순서대로 실행합니다.
 
+## AI 챗봇 / LLM API 키
+
+`/chat` 화면의 AI 비서는 **Kimi (Moonshot AI)** OpenAI 호환 API를 사용합니다. 키가 없으면 결정론적 stub으로 자동 폴백하므로, 데모만 돌릴 때는 키 없이도 동작합니다.
+
+### 어디에 넣나
+
+`backend/.env` 파일에 추가합니다 (없으면 `backend/.env.example`을 복사해서 만드세요).
+
+```bash
+# backend/.env
+KIMI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # https://platform.moonshot.ai/console 에서 발급
+LLM_BASE_URL=https://api.moonshot.ai/v1            # 기본값, 다른 OpenAI 호환 엔드포인트로 교체 가능
+LLM_MODEL=moonshot-v1-8k                           # 기본값
+LLM_PROVIDER=auto                                  # auto: 키 있으면 Kimi, 없으면 stub / stub: 강제 stub
+```
+
+Docker Compose로 띄울 때는 `backend/.env`가 자동으로 컨테이너에 주입됩니다. 키를 바꾼 뒤에는 `docker compose restart backend`로 반영하세요.
+
+### 다른 제공자(OpenAI / 그 외 호환 API) 사용
+
+`LLM_BASE_URL`과 `LLM_MODEL`만 교체하면 됩니다. 예: OpenAI 본가를 쓰려면
+
+```bash
+KIMI_API_KEY=sk-...        # 키 변수명은 그대로 유지 (내부에서 OpenAI SDK로 전달됨)
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
+```
+
+### 보안 주의
+
+- `.env`는 절대 커밋하지 마세요 (`.gitignore`에 포함되어 있습니다).
+- 프론트엔드에는 API 키를 두지 않습니다 — 모든 LLM 호출은 백엔드 `/api/v1/chat`을 경유합니다.
+- 운영 환경에서는 환경변수나 시크릿 매니저(AWS SSM, Vault 등)로 주입하세요.
+
 ## 인증
 
 - 액세스 토큰은 브라우저 메모리, 리프레시 토큰은 `HttpOnly` 쿠키로 관리합니다.
