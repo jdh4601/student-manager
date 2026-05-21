@@ -49,6 +49,19 @@ async def seed() -> None:
             )
             session.add(teacher)
 
+        # 두 번째 교사 (RBAC E2E SMS-69용 — 같은 학교, 다른 teacher_id)
+        result = await session.execute(select(User).where(User.email == "teacher2@example.com"))
+        if result.scalar_one_or_none() is None:
+            session.add(
+                User(
+                    school_id=school.id,
+                    email="teacher2@example.com",
+                    hashed_password=hash_password("password123"),
+                    role="teacher",
+                    name="교사B",
+                )
+            )
+
         # Seed default subjects for all classes in the school
         DEFAULT_SUBJECTS = ["국어", "수학", "영어", "사회", "과학", "체육", "음악", "미술"]
         result = await session.execute(select(Class).where(Class.school_id == school.id))
