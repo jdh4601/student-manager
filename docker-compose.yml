@@ -106,7 +106,8 @@ services:
   analytics-worker:
     build:
       context: ./backend
-    container_name: sm-analytics-worker
+    # container_name 의도적으로 미지정 — `docker compose up --scale analytics-worker=N`
+    # 으로 다중 인스턴스를 띄울 수 있어야 한다 (Kafka consumer group 분산 시연 SMS-67).
     environment:
       PYTHONPATH: /app
       DATABASE_URL: postgresql+asyncpg://sm:smpass@db:5432/student_manager
