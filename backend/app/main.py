@@ -49,10 +49,27 @@ async def app_exception_handler(request: Request, exc: AppException):
 
 @app.exception_handler(RateLimitExceeded)
 async def ratelimit_handler(request: Request, exc: RateLimitExceeded):
-    return JSONResponse(
+    response = JSONResponse(
         status_code=429,
-        content={"detail": "너무 많은 로그인 시도입니다.", "code": "AUTH_RATE_LIMITED"},
+        content={
+            "detail": "요청이 너무 잦습니다. 잠시 후 다시 시도하세요.",
+            "code": "RATE_LIMITED",
+        },
     )
+    # slowapi의 limit 정보로 X-RateLimit-* 헤더 주입, 거기서 Retry-After 도출.
+    view_limit = getattr(request.state, "view_rate_limit", None)
+    if view_limit is not None:
+        try:
+            response = limiter._inject_headers(response, view_limit)
+            reset = response.headers.get("X-RateLimit-Reset")
+            if reset and "Retry-After" not in response.headers:
+                import time
+                retry = max(int(float(reset) - time.time()), 1)
+                response.headers["Retry-After"] = str(retry)
+        except Exception:
+            response.headers.setdefault("Retry-After", "60")
+    response.headers.setdefault("Retry-After", "60")
+    return response
 
 
 @app.get("/health")

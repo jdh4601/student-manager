@@ -4,18 +4,17 @@
 LLM 호출 → 응답 후처리(토큰 → 실제 학생).
 """
 
-from __future__ import annotations
-
 import json
 import re
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies.auth import require_role
 from app.dependencies.db import get_db
 from app.models.user import User
+from app.ratelimit import limiter, user_id_key
 from app.schemas.chat import ChatRequest, ChatResponse, StudentRef
 from app.services.chat_context import ChatContextRepo, get_chat_context_repo
 from app.services.llm_client import LlmClient, get_llm_client
@@ -43,7 +42,9 @@ def _resolve_chat_context_repo(
 
 
 @router.post("", response_model=ChatResponse)
+@limiter.limit("10/minute", key_func=user_id_key)
 async def post_chat(
+    request: Request,
     body: ChatRequest,
     user: User = Depends(require_role("teacher")),
     repo: ChatContextRepo = Depends(_resolve_chat_context_repo),
