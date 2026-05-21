@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   { to: '/feedbacks', label: '피드백' },
   { to: '/counselings', label: '상담 기록' },
   { to: '/notifications', label: '알림' },
+  { to: '/chat', label: 'AI 비서' },
 ];
 
 export default function Sidebar({ onToggle }: { onToggle?: () => void }) {
