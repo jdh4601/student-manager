@@ -1,0 +1,204 @@
+"""SMS-63: POST /api/v1/chat 통합 테스트.
+
+LLM provider와 컨텍스트 repo를 모두 dependency_overrides로 교체하여
+순수 라우터 로직(RBAC, mask_context 호출, 토큰 복원)을 검증한다.
+"""
+
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.main import app
+from app.models import User
+from app.routers.chat import _resolve_chat_context_repo
+from app.services.llm_client import get_llm_client
+from app.utils.security import create_access_token, hash_password
+from tests.conftest import async_session_test
+
+
+class _FakeRepo:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self.rows = rows
+        self.received_teacher_id: uuid.UUID | None = None
+
+    async def fetch_student_rows(self, *, teacher_id, school_id):
+        self.received_teacher_id = teacher_id
+        return list(self.rows)
+
+
+class _FakeLlm:
+    def __init__(self, *, reply: str = "ok") -> None:
+        self.reply = reply
+        self.last_system: str | None = None
+        self.last_user: str | None = None
+
+    async def complete(self, *, system: str, user: str) -> str:
+        self.last_system = system
+        self.last_user = user
+        return self.reply
+
+
+def _override(repo, llm):
+    app.dependency_overrides[_resolve_chat_context_repo] = lambda: repo
+    app.dependency_overrides[get_llm_client] = lambda: llm
+
+
+def _clear_overrides():
+    app.dependency_overrides.pop(_resolve_chat_context_repo, None)
+    app.dependency_overrides.pop(get_llm_client, None)
+
+
+def _five_students(school_id) -> list[dict[str, Any]]:
+    return [
+        {
+            "student_id": uuid.uuid4(),
+            "student_name": f"학생원본{i}",
+            "student_number": i,
+            "class_name": "1-1",
+        }
+        for i in range(1, 6)
+    ]
+
+
+async def test_chat_happy_path_with_stub_llm(auth_client_teacher, seed_teacher):
+    rows = _five_students(seed_teacher.school_id)
+    repo = _FakeRepo(rows)
+    llm = _FakeLlm(reply="응답입니다.")
+    _override(repo, llm)
+    try:
+        resp = await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "1-1 반 평균은?"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reply"] == "응답입니다."
+    assert uuid.UUID(body["thread_id"])  # parseable
+    assert body["referenced_students"] == []
+
+
+async def test_chat_strips_pii_from_system_prompt(auth_client_teacher, seed_teacher):
+    rows = _five_students(seed_teacher.school_id)
+    repo = _FakeRepo(rows)
+    llm = _FakeLlm()
+    _override(repo, llm)
+    try:
+        await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "분석 부탁"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert llm.last_system is not None
+    for row in rows:
+        assert row["student_name"] not in llm.last_system
+        assert str(row["student_id"]) not in llm.last_system
+    # tokens should appear instead
+    assert "학생A" in llm.last_system
+
+
+async def test_chat_resolves_tokens_to_referenced_students(
+    auth_client_teacher, seed_teacher
+):
+    rows = _five_students(seed_teacher.school_id)
+    repo = _FakeRepo(rows)
+    llm = _FakeLlm(reply="학생A와 학생C가 평균보다 낮습니다.")
+    _override(repo, llm)
+    try:
+        resp = await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "?"}
+        )
+    finally:
+        _clear_overrides()
+
+    body = resp.json()
+    refs = body["referenced_students"]
+    assert len(refs) == 2
+    ref_names = {r["name"] for r in refs}
+    assert ref_names == {rows[0]["student_name"], rows[2]["student_name"]}
+
+
+async def test_chat_refuses_when_sample_below_threshold(
+    auth_client_teacher, seed_teacher
+):
+    rows = _five_students(seed_teacher.school_id)[:3]  # k=3
+    repo = _FakeRepo(rows)
+    llm = _FakeLlm(reply="should not be called")
+    _override(repo, llm)
+    try:
+        resp = await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "이 반?"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "5명 미만" in body["reply"]
+    assert body["referenced_students"] == []
+    assert llm.last_user is None  # LLM not called
+
+
+async def test_chat_preserves_thread_id_when_provided(
+    auth_client_teacher, seed_teacher
+):
+    rows = _five_students(seed_teacher.school_id)
+    given = str(uuid.uuid4())
+    _override(_FakeRepo(rows), _FakeLlm(reply="ok"))
+    try:
+        resp = await auth_client_teacher.post(
+            "/api/v1/chat", json={"thread_id": given, "message": "hi"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert resp.json()["thread_id"] == given
+
+
+async def test_chat_requires_authentication(client):
+    resp = await client.post("/api/v1/chat", json={"message": "hi"})
+    assert resp.status_code == 401
+
+
+async def test_chat_rejects_student_role(seed_school):
+    async with async_session_test() as session:
+        student_user = User(
+            school_id=seed_school.id,
+            email="kid@test.com",
+            hashed_password=hash_password("password123"),
+            role="student",
+            name="학생일",
+        )
+        session.add(student_user)
+        await session.commit()
+        await session.refresh(student_user)
+
+    token = create_access_token(
+        {
+            "sub": str(student_user.id),
+            "role": student_user.role,
+            "school_id": str(student_user.school_id),
+        }
+    )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as c:
+        resp = await c.post("/api/v1/chat", json={"message": "hi"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize("bad", ["", "x" * 1001])
+async def test_chat_rejects_invalid_message_length(auth_client_teacher, bad):
+    resp = await auth_client_teacher.post(
+        "/api/v1/chat", json={"message": bad}
+    )
+    assert resp.status_code == 422
