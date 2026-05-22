@@ -24,9 +24,13 @@ class _FakeRepo:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows
         self.received_teacher_id: uuid.UUID | None = None
+        self.received_semester_id: uuid.UUID | None = None
 
-    async def fetch_student_rows(self, *, teacher_id, school_id):
+    async def fetch_student_rows(
+        self, *, teacher_id, school_id, semester_id=None
+    ):
         self.received_teacher_id = teacher_id
+        self.received_semester_id = semester_id
         return list(self.rows)
 
 
@@ -143,6 +147,56 @@ async def test_chat_refuses_when_sample_below_threshold(
     assert "5명 미만" in body["reply"]
     assert body["referenced_students"] == []
     assert llm.last_user is None  # LLM not called
+
+
+async def test_chat_passes_subjects_and_overall_into_system_prompt(
+    auth_client_teacher, seed_teacher
+):
+    """SMS-95 — fetch_student_rows now returns analytics aggregates per student;
+    the masked system prompt must surface those numbers so the LLM can ground
+    quantitative answers."""
+    rows: list[dict[str, Any]] = []
+    for i in range(1, 6):
+        rows.append(
+            {
+                "student_id": uuid.uuid4(),
+                "student_name": f"학생원본{i}",
+                "student_number": i,
+                "class_name": "1-1",
+                "overall": {
+                    "avg_score": 80.0 + i,
+                    "subject_count": 3,
+                    "attendance_present_rate": 0.95,
+                    "feedback_count": 1,
+                },
+                "subjects": [
+                    {
+                        "name": "영어",
+                        "avg_score": 78.0 + i,
+                        "max_score": 92.0,
+                        "min_score": 60.0,
+                        "latest_rank": 4,
+                        "sample_count": 5,
+                    },
+                ],
+            }
+        )
+    repo = _FakeRepo(rows)
+    llm = _FakeLlm()
+    _override(repo, llm)
+    try:
+        await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "이번 학기 영어 평균이 어때?"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert llm.last_system is not None
+    # Quantitative grounding survives masking
+    assert "영어" in llm.last_system
+    assert "avg_score" in llm.last_system
+    assert "subjects" in llm.last_system
+    assert "overall" in llm.last_system
 
 
 async def test_chat_preserves_thread_id_when_provided(
