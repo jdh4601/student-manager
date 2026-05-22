@@ -94,6 +94,42 @@ def test_mask_context_handles_full_class_through_z():
     assert len(token_map) == 26
 
 
+def test_mask_context_tokens_above_26_extend_to_two_letters():
+    """B1 regression: 27명 이상이면 두 글자 토큰으로 확장된다.
+
+    이전 구현(``f"학생{chr(64+i)}"``)은 i=27에서 ``학생[``를 만들어
+    chat.py의 ``_TOKEN_PATTERN(r"학생[A-Z]")``이 silent drop 했다.
+    평가용 시드(~30명) 경계에 정확히 걸리던 버그.
+    """
+    import re
+
+    rows = _student_rows(28)
+    masked, token_map = mask_context(rows)
+
+    assert masked[25]["student_name"] == "학생Z"
+    assert masked[26]["student_name"] == "학생AA"
+    assert masked[27]["student_name"] == "학생AB"
+
+    # chat.py 의 라우터 정규식 (두 글자 허용) 이 새 토큰을 모두 잡아낸다
+    router_pattern = re.compile(r"학생[A-Z]{1,2}")
+    for row in masked:
+        token = row["student_name"]
+        assert router_pattern.fullmatch(token), f"router regex misses {token!r}"
+        assert token in token_map
+
+
+def test_index_to_token_boundary_cases():
+    """``_index_to_token`` 경계: 26 → 학생Z, 27 → 학생AA, 702 → 학생ZZ."""
+    from app.services.llm_sanitizer import _index_to_token
+
+    assert _index_to_token(1) == "학생A"
+    assert _index_to_token(26) == "학생Z"
+    assert _index_to_token(27) == "학생AA"
+    assert _index_to_token(52) == "학생AZ"
+    assert _index_to_token(53) == "학생BA"
+    assert _index_to_token(702) == "학생ZZ"
+
+
 def test_mask_context_drops_subject_id_from_nested_subjects():
     """SMS-96 — subjects[].subject_id is UUID noise the LLM can't use."""
     rows = _student_rows(5)

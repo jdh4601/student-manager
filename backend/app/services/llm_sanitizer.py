@@ -20,6 +20,22 @@ _PII_FIELDS = ("student_id", "email", "phone")
 _SUBJECT_NOISE_FIELDS = ("subject_id",)
 
 
+def _index_to_token(i: int) -> str:
+    """1-indexed 자리수 → ``학생A``..``학생Z``, ``학생AA``..``학생ZZ``.
+
+    단일 알파벳 토큰만 쓰면 i ≥ 27에서 ``chr(91)='['`` 등 [A-Z] 밖의 문자가
+    생성되어 라우터의 ``_TOKEN_PATTERN(r"학생[A-Z]{1,2}")``이 매칭하지 못한다.
+    두 글자까지 확장하면 학생 26 + 26*26 = 702명까지 안전하다.
+    """
+    idx = i - 1
+    if idx < 26:
+        return f"학생{chr(65 + idx)}"
+    idx -= 26
+    first = idx // 26
+    second = idx % 26
+    return f"학생{chr(65 + first)}{chr(65 + second)}"
+
+
 class SmallSampleError(Exception):
     """표본이 MIN_SAMPLE_SIZE 미만일 때 발생."""
 
@@ -51,7 +67,7 @@ def mask_context(
             masked_rows.append(row)
             continue
 
-        token = f"학생{chr(64 + i)}"
+        token = _index_to_token(i)
         token_map[token] = row["student_id"]
 
         new_row = {

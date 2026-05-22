@@ -23,7 +23,7 @@ from app.services.llm_sanitizer import SmallSampleError, mask_context
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-_TOKEN_PATTERN = re.compile(r"학생[A-Z]")
+_TOKEN_PATTERN = re.compile(r"학생[A-Z]{1,2}")
 
 _SYSTEM_PROMPT = (
     "당신은 한국어 학교 데이터 분석 비서입니다. "
