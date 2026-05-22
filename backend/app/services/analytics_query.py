@@ -45,6 +45,20 @@ class StudentOverviewRepo(Protocol):
         self, *, student_id: uuid.UUID, semester_id: uuid.UUID | None
     ) -> list[SubjectRow]: ...
 
+    async def get_overall_batch(
+        self,
+        *,
+        student_ids: list[uuid.UUID],
+        semester_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, OverallRow]: ...
+
+    async def get_subjects_batch(
+        self,
+        *,
+        student_ids: list[uuid.UUID],
+        semester_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, list[SubjectRow]]: ...
+
 
 class PostgresStudentOverviewRepo:
     """Raw-SQL impl against the Postgres ``analytics`` schema."""
@@ -96,6 +110,109 @@ class PostgresStudentOverviewRepo:
             attendance_present_rate=_to_float(row["attendance_present_rate"]),
             feedback_count=int(row["feedback_count"] or 0),
         )
+
+    async def get_overall_batch(
+        self,
+        *,
+        student_ids: list[uuid.UUID],
+        semester_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, OverallRow]:
+        """Batch variant of :py:meth:`get_overall` for chat context builders.
+
+        Returns a dict keyed by ``student_id``. Students with no projection
+        yet are simply absent from the dict (no None entries).
+        """
+        if not student_ids:
+            return {}
+
+        ids_param = [str(sid) for sid in student_ids]
+        if semester_id is None:
+            stmt = text(
+                """
+                SELECT
+                    student_id,
+                    avg(avg_score)                  AS avg_score,
+                    sum(total_score)                AS total_score,
+                    COALESCE(max(subject_count), 0) AS subject_count,
+                    avg(attendance_present_rate)    AS attendance_present_rate,
+                    COALESCE(sum(feedback_count), 0) AS feedback_count
+                FROM analytics.agg_student_overall
+                WHERE student_id = ANY(:ids)
+                GROUP BY student_id
+                """
+            )
+            params: dict = {"ids": ids_param}
+        else:
+            stmt = text(
+                """
+                SELECT student_id, avg_score, total_score, subject_count,
+                       attendance_present_rate, feedback_count
+                FROM analytics.agg_student_overall
+                WHERE student_id = ANY(:ids) AND semester_id = :semester_id
+                """
+            )
+            params = {"ids": ids_param, "semester_id": str(semester_id)}
+
+        result = await self._db.execute(stmt, params)
+        out: dict[uuid.UUID, OverallRow] = {}
+        for row in result.mappings().all():
+            sid = uuid.UUID(str(row["student_id"]))
+            out[sid] = OverallRow(
+                avg_score=_to_float(row["avg_score"]),
+                total_score=_to_float(row["total_score"]),
+                subject_count=int(row["subject_count"] or 0),
+                attendance_present_rate=_to_float(row["attendance_present_rate"]),
+                feedback_count=int(row["feedback_count"] or 0),
+            )
+        return out
+
+    async def get_subjects_batch(
+        self,
+        *,
+        student_ids: list[uuid.UUID],
+        semester_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, list[SubjectRow]]:
+        """Batch variant of :py:meth:`get_subjects`. Students with no rows are absent."""
+        if not student_ids:
+            return {}
+
+        params: dict = {"ids": [str(sid) for sid in student_ids]}
+        where = "WHERE a.student_id = ANY(:ids)"
+        if semester_id is not None:
+            where += " AND a.semester_id = :semester_id"
+            params["semester_id"] = str(semester_id)
+        stmt = text(
+            f"""
+            SELECT a.student_id,
+                   a.subject_id,
+                   s.name        AS name,
+                   a.avg_score,
+                   a.max_score,
+                   a.min_score,
+                   a.latest_rank,
+                   a.sample_count
+            FROM analytics.agg_student_subject a
+            JOIN public.subjects s ON s.id = a.subject_id
+            {where}
+            ORDER BY a.student_id, s.name
+            """
+        )
+        result = await self._db.execute(stmt, params)
+        out: dict[uuid.UUID, list[SubjectRow]] = {}
+        for r in result.mappings().all():
+            sid = uuid.UUID(str(r["student_id"]))
+            out.setdefault(sid, []).append(
+                SubjectRow(
+                    subject_id=uuid.UUID(str(r["subject_id"])),
+                    name=r["name"],
+                    avg_score=_to_float(r["avg_score"]),
+                    max_score=_to_float(r["max_score"]),
+                    min_score=_to_float(r["min_score"]),
+                    latest_rank=int(r["latest_rank"]) if r["latest_rank"] is not None else None,
+                    sample_count=int(r["sample_count"] or 0),
+                )
+            )
+        return out
 
     async def get_subjects(
         self, *, student_id: uuid.UUID, semester_id: uuid.UUID | None
