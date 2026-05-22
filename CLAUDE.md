@@ -30,6 +30,12 @@ npm run e2e          # playwright
 2. **이슈 하나의 작업이 끝날 때마다** → 즉시 해당 Jira 이슈를 `완료`(31)로 전환하고, 변경 내역을 코멘트로 남긴 뒤 (필요 시) 부모 에픽의 진척도와 남은 스프린트 이슈 목록을 출력. 다음 이슈 시작 전에 반드시 수행.
 3. 스프린트 전체 완료 시 → `POST /rest/agile/1.0/sprint/{id}` `{"state":"closed"}`
 
+## Jira/Linear Workflow
+- TDD: 실패하는 테스트를 먼저 작성한 뒤 구현
+- 이슈 완료 시: 테스트 → conventional commit → Jira/Linear 상태 전환 → codemap 업데이트
+- 한국어 로컬라이즈된 Jira 프로젝트는 한국어 이슈 타입('에픽', '작업', '스토리') 사용
+- REST API 호출보다 MCP 도구(mcp__jira__*, Linear MCP) 우선 사용
+
 ## 남은 작업
 
 - E2E 테스트 미작성: 상담·알림·import/export 플로우 (`frontend/e2e/`)
