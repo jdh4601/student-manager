@@ -94,6 +94,44 @@ def test_mask_context_handles_full_class_through_z():
     assert len(token_map) == 26
 
 
+def test_mask_context_drops_subject_id_from_nested_subjects():
+    """SMS-96 — subjects[].subject_id is UUID noise the LLM can't use."""
+    rows = _student_rows(5)
+    sub_id = str(uuid4())
+    for r in rows:
+        r["subjects"] = [
+            {
+                "subject_id": sub_id,
+                "name": "영어",
+                "avg_score": 78.0,
+                "max_score": 92.0,
+            }
+        ]
+
+    masked, _ = mask_context(rows)
+
+    for row in masked:
+        assert row["subjects"], "subjects array must be preserved"
+        for entry in row["subjects"]:
+            assert "subject_id" not in entry
+            # Useful fields stay
+            assert entry["name"] == "영어"
+            assert entry["avg_score"] == 78.0
+            assert entry["max_score"] == 92.0
+
+
+def test_mask_context_preserves_overall_object_as_is():
+    """overall is a flat aggregate dict with no PII — pass-through."""
+    rows = _student_rows(5)
+    for r in rows:
+        r["overall"] = {"avg_score": 82.4, "subject_count": 8}
+
+    masked, _ = mask_context(rows)
+
+    for row in masked:
+        assert row["overall"] == {"avg_score": 82.4, "subject_count": 8}
+
+
 def test_mask_context_does_not_mutate_input_rows():
     rows = _student_rows(5)
     original_first_name = rows[0]["student_name"]

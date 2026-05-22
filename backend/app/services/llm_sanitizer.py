@@ -15,6 +15,10 @@ MIN_SAMPLE_SIZE = 5
 
 _PII_FIELDS = ("student_id", "email", "phone")
 
+# Fields to strip from nested ``subjects[]`` entries. ``subject_id`` is a UUID
+# the LLM can't ground on — pure token cost.
+_SUBJECT_NOISE_FIELDS = ("subject_id",)
+
 
 class SmallSampleError(Exception):
     """표본이 MIN_SAMPLE_SIZE 미만일 때 발생."""
@@ -57,6 +61,11 @@ def mask_context(
         }
         for field in _PII_FIELDS:
             new_row.pop(field, None)
+        if isinstance(new_row.get("subjects"), list):
+            new_row["subjects"] = [
+                {k: v for k, v in entry.items() if k not in _SUBJECT_NOISE_FIELDS}
+                for entry in new_row["subjects"]
+            ]
         masked_rows.append(new_row)
 
     return masked_rows, token_map
