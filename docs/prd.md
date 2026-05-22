@@ -246,9 +246,12 @@
 ### 10.2 분석 테이블 (요약)
 - `analytics.fact_grade_event` — Grade INSERT/UPDATE 이벤트 로그 (append-only)
 - `analytics.fact_attendance_event` — Attendance 이벤트 로그
+- `analytics.fact_feedback_event` — Feedback 이벤트 로그
+- `analytics.fact_counseling_event` — Counseling 이벤트 로그 (audit 용도, agg 미생성)
 - `analytics.dim_student` — 학생 차원 (snapshot, daily refresh)
 - `analytics.agg_student_subject` — 학생×과목 집계 (평균·최고·최저·등급 추이)
 - `analytics.agg_student_overall` — 학생 단위 종합 지표 (학기별)
+- `analytics.dead_letter_event` — 컨슈머가 처리 불가능한 poison message 격리 (운영 디버깅)
 
 ### 10.3 CDC 파이프라인 (Outbox + Kafka)
 - 운영 라우터 트랜잭션 안에서 `public.outbox` row INSERT (도메인 변경과 같은 트랜잭션)
@@ -278,14 +281,15 @@
 - 구현 예산: 약 3일 (W6)
 
 ### 11.2 PII 정책
-- 챗봇 답변 범위를 **학급 단위 통계**로 제한 (k≥5 실질 충족) → 단일 학생 식별 가능 응답 차단
-- LLM 컨텍스트의 학생명·학번은 단순 치환 마스킹: `김철수 → 학생A`, `student_number=15 → seq_015`
-- 응답 후처리에서 token을 실제 학생으로 매핑 (서버 메모리)
-- 외부 LLM provider에는 마스킹된 통계만 전송
+- 컨텍스트 추출 범위는 교사 담임 학급으로 한정. LLM에는 학생 단위 통계(overall + subjects[])를 **마스킹된 형태**로 전달하며, 학생 수가 5 미만이면 LLM 호출 자체를 거부 (k≥5 가드, `SmallSampleError`)
+- LLM 컨텍스트의 학생명·학번은 단순 치환 마스킹: `김철수 → 학생A` (26명 초과 시 `학생AA`로 두 글자 확장, ~702명까지 안전), `student_number=15 → seq_015`
+- 응답 후처리에서 토큰을 실제 학생으로 역매핑 (서버 메모리)
+- 외부 LLM provider에 전송되는 페이로드에는 학생 식별 정보(이름·학번·UUID·이메일·전화번호) 0건을 `tests/test_llm_sanitizer.py`로 보증
 
 ### 11.3 아키텍처
 - **별도 서비스 분리하지 않음**. FastAPI 백엔드의 단일 엔드포인트 `POST /api/v1/chat`
-- LLM 호출은 단일 provider (환경변수로 OpenAI 또는 Anthropic 선택). `LLMClient` 추상화 인터페이스 도입하지 않음 (1인·평가용 환경에서 ROI 음수)
+- LLM 호출은 OpenAI 호환 endpoint 단일 (기본 `https://api.openai.com/v1`, `LLM_BASE_URL`로 Kimi/Together/Groq 등 호환 게이트웨이 사용 가능). `OPENAI_API_KEY` 미설정 또는 `LLM_PROVIDER=stub`이면 결정론적 stub fallback
+- 테스트 용이성을 위해 `LlmClient` Protocol + `StubLlmClient` + `OpenAiLlmClient`로 의존성 주입 (`tests/test_chat.py`가 `app.dependency_overrides`로 교체) — 의도된 진화
 - Rate limiting: 교사당 분당 10회 (slowapi)
 
 ---

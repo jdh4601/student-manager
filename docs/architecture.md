@@ -39,7 +39,7 @@
                               │
                               ▼
                      [LLM Provider 외부]
-                     (OpenAI 또는 Anthropic, 단일 선택)
+                     (OpenAI 호환 endpoint, 단일)
 ```
 
 > SMTP·Vercel Edge 등 외부 서비스는 평가용 로컬 환경에서 stub 또는 미연결 상태.
@@ -308,7 +308,8 @@ Teacher                fastapi-api : routers/chat.py     analytics 스키마    
 git clone ...
 make up                  # docker-compose up -d --build
 make seed                # scripts/demo_seed.py 실행
-make test                # ruff + pytest + tsc + playwright
+make qa                  # ruff + pytest + tsc (Makefile 기준)
+make e2e                 # playwright
 make demo-scale          # docker-compose up --scale analytics-worker=3
 ```
 
