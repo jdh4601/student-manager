@@ -149,6 +149,80 @@ async def test_chat_refuses_when_sample_below_threshold(
     assert llm.last_user is None  # LLM not called
 
 
+async def test_chat_resolves_semester_from_ibeon_keyword(
+    auth_client_teacher, seed_teacher
+):
+    """SMS-97 — '이번' → latest semester id reaches the repo."""
+    from app.models import Semester
+
+    async with async_session_test() as session:
+        latest = Semester(year=2026, term=1)
+        previous = Semester(year=2025, term=2)
+        session.add_all([latest, previous])
+        await session.commit()
+        await session.refresh(latest)
+
+    repo = _FakeRepo(_five_students(seed_teacher.school_id))
+    _override(repo, _FakeLlm())
+    try:
+        await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "이번 학기 영어 평균이 어때?"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert repo.received_semester_id == latest.id
+
+
+async def test_chat_resolves_semester_from_jinan_keyword(
+    auth_client_teacher, seed_teacher
+):
+    """SMS-97 — '지난' → second-latest semester id reaches the repo."""
+    from app.models import Semester
+
+    async with async_session_test() as session:
+        latest = Semester(year=2026, term=1)
+        previous = Semester(year=2025, term=2)
+        session.add_all([latest, previous])
+        await session.commit()
+        await session.refresh(previous)
+
+    repo = _FakeRepo(_five_students(seed_teacher.school_id))
+    _override(repo, _FakeLlm())
+    try:
+        await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "지난 학기 평균과 비교"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert repo.received_semester_id == previous.id
+
+
+async def test_chat_falls_back_to_latest_when_no_keyword(
+    auth_client_teacher, seed_teacher
+):
+    """SMS-97 — 학기 키워드 없으면 최신 학기로 폴백."""
+    from app.models import Semester
+
+    async with async_session_test() as session:
+        latest = Semester(year=2026, term=1)
+        session.add(latest)
+        await session.commit()
+        await session.refresh(latest)
+
+    repo = _FakeRepo(_five_students(seed_teacher.school_id))
+    _override(repo, _FakeLlm())
+    try:
+        await auth_client_teacher.post(
+            "/api/v1/chat", json={"message": "우리 반 평균"}
+        )
+    finally:
+        _clear_overrides()
+
+    assert repo.received_semester_id == latest.id
+
+
 async def test_chat_passes_subjects_and_overall_into_system_prompt(
     auth_client_teacher, seed_teacher
 ):

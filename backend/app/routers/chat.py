@@ -17,6 +17,7 @@ from app.models.user import User
 from app.ratelimit import limiter, user_id_key
 from app.schemas.chat import ChatRequest, ChatResponse, StudentRef
 from app.services.chat_context import ChatContextRepo, get_chat_context_repo
+from app.services.chat_intent import resolve_semester_id
 from app.services.llm_client import LlmClient, get_llm_client
 from app.services.llm_sanitizer import SmallSampleError, mask_context
 
@@ -49,9 +50,13 @@ async def post_chat(
     user: User = Depends(require_role("teacher")),
     repo: ChatContextRepo = Depends(_resolve_chat_context_repo),
     llm: LlmClient = Depends(get_llm_client),
+    db: AsyncSession = Depends(get_db),
 ) -> ChatResponse:
+    semester_id = await resolve_semester_id(body.message, db)
     rows = await repo.fetch_student_rows(
-        teacher_id=user.id, school_id=user.school_id
+        teacher_id=user.id,
+        school_id=user.school_id,
+        semester_id=semester_id,
     )
 
     name_by_id = {row["student_id"]: row["student_name"] for row in rows}

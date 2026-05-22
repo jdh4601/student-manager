@@ -13,7 +13,7 @@ from app.services.llm_client import get_llm_client
 
 
 class _StubRepo:
-    async def fetch_student_rows(self, *, teacher_id, school_id):
+    async def fetch_student_rows(self, *, teacher_id, school_id, semester_id=None):
         return [
             {
                 "student_id": uuid.uuid4(),
