@@ -46,13 +46,13 @@ class Settings(BaseSettings):
     # Kafka — outbox-publisher / analytics-worker
     kafka_bootstrap_servers: str = "localhost:9092"
 
-    # Chat / LLM (Kimi via OpenAI-compatible API; spec §10)
-    kimi_api_key: str | None = None
-    llm_base_url: str = "https://api.moonshot.ai/v1"
-    llm_model: str = "moonshot-v1-8k"
+    # Chat / LLM (OpenAI API; spec §10)
+    openai_api_key: str | None = None
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_model: str = "gpt-4o-mini"
     llm_timeout_seconds: float = 10.0
     llm_max_tokens: int = 1024
-    # "auto" picks kimi when key present, else stub. Set to "stub" to force stub.
+    # "auto" picks OpenAI when key present, else stub. Set to "stub" to force stub.
     llm_provider: str = "auto"
 
     model_config = {"env_file": ".env"}

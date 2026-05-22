@@ -1,7 +1,7 @@
 """LLM provider client.
 
-기본은 Kimi (Moonshot AI) — OpenAI 호환 API를 OpenAI SDK로 호출한다.
-KIMI_API_KEY가 없거나 `LLM_PROVIDER=stub`이면 결정론적 stub으로 폴백한다.
+기본은 OpenAI API를 OpenAI SDK로 호출한다.
+OPENAI_API_KEY가 없거나 `LLM_PROVIDER=stub`이면 결정론적 stub으로 폴백한다.
 
 Spec: docs/design-spec.md §10.4 — POST /api/v1/chat, timeout 10s, max_tokens 1024.
 """
@@ -25,8 +25,8 @@ class StubLlmClient:
         return f"[stub] ctx_chars={len(system)} msg={user[:80]}"
 
 
-class KimiLlmClient:
-    """Kimi (Moonshot) — OpenAI 호환 endpoint."""
+class OpenAiLlmClient:
+    """OpenAI (or any OpenAI-compatible) endpoint."""
 
     def __init__(
         self,
@@ -68,12 +68,12 @@ class KimiLlmClient:
 def get_llm_client() -> LlmClient:
     """FastAPI dependency. 테스트는 `app.dependency_overrides`로 교체."""
     provider = settings.llm_provider
-    if provider == "stub" or (provider == "auto" and not settings.kimi_api_key):
+    if provider == "stub" or (provider == "auto" and not settings.openai_api_key):
         return StubLlmClient()
-    if not settings.kimi_api_key:
+    if not settings.openai_api_key:
         raise AppException(503, "LLM 미설정", "CHAT_LLM_NOT_CONFIGURED")
-    return KimiLlmClient(
-        api_key=settings.kimi_api_key,
+    return OpenAiLlmClient(
+        api_key=settings.openai_api_key,
         base_url=settings.llm_base_url,
         model=settings.llm_model,
         timeout_seconds=settings.llm_timeout_seconds,

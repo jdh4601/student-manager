@@ -11,7 +11,7 @@
   lsof -i :5432,9092,9093,18000,5173
   ```
 - [ ] `git status` 깨끗한가 (커밋 안 된 실험 코드 없음)
-- [ ] `.env` 또는 환경변수에 `KIMI_API_KEY` 설정 (실 LLM 시연 시) — 없으면 stub
+- [ ] `.env` 또는 환경변수에 `OPENAI_API_KEY` 설정 (실 LLM 시연 시) — 없으면 stub
 - [ ] Wi-Fi 안정 (LLM API 호출 시 필요)
 
 ## T-30분: 시드 + 워밍업
@@ -49,7 +49,7 @@
 2. **01:30** — `/students/{id}` 진입해 학생 상세 → 1과목 점수 +5 수정 → 저장
 3. **02:00** — 대시보드로 돌아와 새로고침 → 평균이 갱신됐는지 확인 (≤ 1초)
 4. **03:00** — `make demo-scale-logs` 화면을 잠깐 보여줘 worker 3개 분산 로그 강조
-5. **04:00** — `/chat` 진입 → "이 반 영어 점수 분포 어때?" → 답변(stub or Kimi)
+5. **04:00** — `/chat` 진입 → "이 반 영어 점수 분포 어때?" → 답변(stub or OpenAI)
 6. **05:30** — 임시 비어 있는 반(또는 4명만 있는 반)에서 같은 질문 → "5명 미만" 거부
 7. **07:00** — analytics-worker 하나 stop (`docker compose stop sm-analytics-worker-2`) → rebalance 로그
 8. **08:00** — 다시 stop된 worker start, 마무리 시각화
@@ -59,7 +59,7 @@
 | 증상 | 1차 대응 |
 |------|---------|
 | 대시보드가 로드되지 않음 | 브라우저 새로고침 → `docker compose logs backend` → 401이면 재로그인 |
-| 채팅 응답이 timeout | `KIMI_API_KEY` 미설정 가능성. stub fallback이 작동 중인지 라우터 코드 확인 |
+| 채팅 응답이 timeout | `OPENAI_API_KEY` 미설정 가능성. stub fallback이 작동 중인지 라우터 코드 확인 |
 | 분산 로그가 1대만 흐름 | `docker compose ps analytics-worker` 인스턴스 수 확인. 1이면 `--scale 3` 누락 |
 | 시드 데이터가 안 보임 | `docker compose exec backend python /scripts/demo_seed.py` 수동 실행 |
 

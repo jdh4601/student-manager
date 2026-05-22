@@ -58,7 +58,7 @@ npm run qa
 
 ## AI 챗봇 / LLM API 키
 
-`/chat` 화면의 AI 비서는 **Kimi (Moonshot AI)** OpenAI 호환 API를 사용합니다. 키가 없으면 결정론적 stub으로 자동 폴백하므로, 데모만 돌릴 때는 키 없이도 동작합니다.
+`/chat` 화면의 AI 비서는 **OpenAI API**를 사용합니다. 키가 없으면 결정론적 stub으로 자동 폴백하므로, 데모만 돌릴 때는 키 없이도 동작합니다.
 
 ### 어디에 넣나
 
@@ -66,22 +66,22 @@ npm run qa
 
 ```bash
 # backend/.env
-KIMI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # https://platform.moonshot.ai/console 에서 발급
-LLM_BASE_URL=https://api.moonshot.ai/v1            # 기본값, 다른 OpenAI 호환 엔드포인트로 교체 가능
-LLM_MODEL=moonshot-v1-8k                           # 기본값
-LLM_PROVIDER=auto                                  # auto: 키 있으면 Kimi, 없으면 stub / stub: 강제 stub
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx   # https://platform.openai.com/api-keys 에서 발급
+LLM_BASE_URL=https://api.openai.com/v1               # 기본값, 다른 OpenAI 호환 엔드포인트로 교체 가능
+LLM_MODEL=gpt-4o-mini                                # 기본값
+LLM_PROVIDER=auto                                    # auto: 키 있으면 OpenAI, 없으면 stub / stub: 강제 stub
 ```
 
 Docker Compose로 띄울 때는 `backend/.env`가 자동으로 컨테이너에 주입됩니다. 키를 바꾼 뒤에는 `docker compose restart backend`로 반영하세요.
 
-### 다른 제공자(OpenAI / 그 외 호환 API) 사용
+### 다른 제공자(OpenAI 호환 API) 사용
 
-`LLM_BASE_URL`과 `LLM_MODEL`만 교체하면 됩니다. 예: OpenAI 본가를 쓰려면
+`LLM_BASE_URL`과 `LLM_MODEL`만 교체하면 됩니다. 예: Kimi (Moonshot AI)를 쓰려면
 
 ```bash
-KIMI_API_KEY=sk-...        # 키 변수명은 그대로 유지 (내부에서 OpenAI SDK로 전달됨)
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...      # 키 변수명은 그대로 유지 (내부에서 OpenAI SDK로 전달됨)
+LLM_BASE_URL=https://api.moonshot.ai/v1
+LLM_MODEL=moonshot-v1-8k
 ```
 
 ### 보안 주의

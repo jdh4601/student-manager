@@ -4,7 +4,7 @@
  * - k<5 학급: 응답이 정중한 거부 메시지("5명 미만 …") 여야 함
  * - k≥5 학급: 응답에 RAW 학생명/학번이 노출되지 않아야 함
  *
- * 백엔드는 stub LLM provider(`LLM_PROVIDER=auto` 이고 `KIMI_API_KEY` 미설정 시)로
+ * 백엔드는 stub LLM provider(`LLM_PROVIDER=auto` 이고 `OPENAI_API_KEY` 미설정 시)로
  * 동작하므로 외부 의존성 없이 일반 CI에서 그린.
  */
 

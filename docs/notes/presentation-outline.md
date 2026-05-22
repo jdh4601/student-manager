@@ -55,8 +55,8 @@
 - **왜 Kafka?** 학교 도메인 이벤트가 다수 분석 워커에 fan-out 필요. RabbitMQ도
   가능했지만 partition별 ordered consumer + replay가 명확.
 - **왜 PG outbox?** 도메인 트랜잭션과 메시지 발행을 atomic하게 묶기 위함. 2PC 회피.
-- **왜 Kimi LLM?** OpenAI 호환 API라 SDK는 동일 (`openai` 패키지). 비용/지연이
-  Anthropic, OpenAI 대비 우수. 키만 바꾸면 다른 provider로 즉시 교체 가능.
+- **왜 OpenAI LLM?** `openai` 공식 SDK로 직접 호출. `LLM_BASE_URL`만 바꾸면
+  Kimi/Moonshot 등 OpenAI 호환 provider로 즉시 교체 가능.
 - **왜 React + Vite?** 빌드/HMR 속도 + Vercel 호환. Next.js는 SSR이 필요 없어 회피.
 
 ## 6. 정량 결과
