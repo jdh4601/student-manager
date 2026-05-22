@@ -181,9 +181,9 @@
 | 레이어 | 기술 |
 |--------|------|
 | Frontend | React 18, TypeScript, Tailwind CSS, Zustand, TanStack Query, Recharts |
-| Backend | FastAPI (Python 3.11), Pydantic v2, SQLAlchemy 2.0, Alembic |
-| Outbox Publisher | Python 3.11, aiokafka (Kafka producer) |
-| Analytics Worker | Python 3.11, aiokafka (Kafka consumer + consumer group) |
+| Backend | FastAPI (Python 3.12), Pydantic v2, SQLAlchemy 2.0, Alembic |
+| Outbox Publisher | Python 3.12, aiokafka (Kafka producer) |
+| Analytics Worker | Python 3.12, aiokafka (Kafka consumer + consumer group) |
 | Chat 엔드포인트 | FastAPI 백엔드 내부 단일 라우터 (`/api/v1/chat`). LLM SDK 직접 호출 |
 | Message Stream | Apache Kafka (KRaft 단일 노드, docker-compose). **Fallback**: Redpanda |
 | Database | PostgreSQL (`public` + `analytics` + `outbox` 테이블 동일 인스턴스) |
@@ -259,7 +259,7 @@
 - `analytics-worker`(Kafka consumer, consumer group)가 토픽 구독 → `analytics.*` 테이블 UPSERT (idempotent)
 - 메시지 브로커: Kafka KRaft 단일 노드 (docker-compose). Fallback: Redpanda
 - Publisher 부팅 시 `WHERE sent_at IS NULL` 쿼리로 catch-up
-- 정합성 검증: 통합 테스트 (testcontainers) + 매 commit 시 운영 row 수 vs `analytics.fact_*` row 수 비교 (`scripts/check_consistency.py`)
+- 정합성 검증: testcontainers 기반 통합 테스트 (`backend/tests/integration/*`, `pytest -m integration`) — publisher → consumer → `analytics.fact_*` row 수가 운영 변경과 일치하는지 자동 검증. 별도 CLI 스크립트는 미도입
 - 자세한 패턴 비교/근거: ADR-002
 
 ### 10.4 분석 API
