@@ -44,6 +44,9 @@ from app.models.grade import Grade  # noqa: E402
 from app.models.semester import Semester  # noqa: E402
 from app.models.student import Student  # noqa: E402
 from app.models.subject import Subject  # noqa: E402
+from app.services.counseling import _counseling_outbox_row  # noqa: E402
+from app.services.feedback import _feedback_outbox_row  # noqa: E402
+from app.services.grade import _grade_outbox_row  # noqa: E402
 from app.utils.security import hash_password  # noqa: E402
 
 random.seed(20260521)
@@ -202,15 +205,18 @@ async def _seed_grades(
             for sem in semesters:
                 noise = random.uniform(-6, 6)
                 score = max(0.0, min(100.0, ability + subj_bias + noise))
-                session.add(
-                    Grade(
-                        student_id=student.id,
-                        subject_id=subj.id,
-                        semester_id=sem.id,
-                        score=Decimal(f"{score:.1f}"),
-                        created_by=teacher.id,
-                    )
+                grade = Grade(
+                    student_id=student.id,
+                    subject_id=subj.id,
+                    semester_id=sem.id,
+                    score=Decimal(f"{score:.1f}"),
+                    created_by=teacher.id,
                 )
+                session.add(grade)
+                # outbox row in the same TX so publisher → analytics-worker
+                # rebuilds agg_student_subject / agg_student_overall after seed.
+                await session.flush()
+                session.add(_grade_outbox_row(grade, op="INSERT"))
                 count += 1
     await session.flush()
     return count
@@ -228,16 +234,17 @@ async def _seed_feedbacks(session, students: list[Student], teacher: User) -> in
         for _ in range(random.randint(4, 8)):
             cat = random.choice(FEEDBACK_CATEGORIES)
             offset = random.randint(0, 300)
-            session.add(
-                Feedback(
-                    student_id=student.id,
-                    teacher_id=teacher.id,
-                    category=cat,
-                    content=f"{cat} 관련 코멘트 — 학생{i + 1} (auto-seed)",
-                    is_visible_to_student=False,
-                    is_visible_to_parent=False,
-                )
+            fb = Feedback(
+                student_id=student.id,
+                teacher_id=teacher.id,
+                category=cat,
+                content=f"{cat} 관련 코멘트 — 학생{i + 1} (auto-seed)",
+                is_visible_to_student=False,
+                is_visible_to_parent=False,
             )
+            session.add(fb)
+            await session.flush()
+            session.add(_feedback_outbox_row(fb, semester_id=None, op="INSERT"))
             count += 1
         _ = today  # silence linter
         _ = offset
@@ -256,16 +263,17 @@ async def _seed_counselings(session, students: list[Student], teacher: User) -> 
         # 학생당 평균 2회 상담
         for _ in range(random.randint(1, 3)):
             offset = random.randint(0, 200)
-            session.add(
-                Counseling(
-                    student_id=student.id,
-                    teacher_id=teacher.id,
-                    date=today - timedelta(days=offset),
-                    content="진로 및 학습 상담 (auto-seed).",
-                    next_plan="다음 달 후속 면담.",
-                    is_shared=True,
-                )
+            cs = Counseling(
+                student_id=student.id,
+                teacher_id=teacher.id,
+                date=today - timedelta(days=offset),
+                content="진로 및 학습 상담 (auto-seed).",
+                next_plan="다음 달 후속 면담.",
+                is_shared=True,
             )
+            session.add(cs)
+            await session.flush()
+            session.add(_counseling_outbox_row(cs, op="INSERT"))
             count += 1
     await session.flush()
     return count
