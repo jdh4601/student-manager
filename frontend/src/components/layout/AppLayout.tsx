@@ -1,6 +1,7 @@
 import { ReactNode, useState } from 'react';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import FloatingTeacher from '../Chat/FloatingTeacher';
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const [desktopSidebarOpen, setDesktopSidebarOpen] = useState(true);
@@ -36,6 +37,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         />
         <main className="p-6">{children}</main>
       </div>
+      <FloatingTeacher />
     </div>
   );
 }

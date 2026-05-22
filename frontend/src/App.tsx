@@ -21,7 +21,6 @@ const FeedbackPage = lazy(() => import('./pages/FeedbackPage'));
 const CounselingPage = lazy(() => import('./pages/CounselingPage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
 const AnalyticsDashboardPage = lazy(() => import('./pages/AnalyticsDashboardPage'));
-const ChatPage = lazy(() => import('./pages/ChatPage'));
 
 function App() {
   return (
@@ -79,7 +78,6 @@ function App() {
                   <Route path="/grades/:studentId" element={<GradesPage />} />
                   <Route path="/feedbacks" element={<FeedbackPage />} />
                   <Route path="/counselings" element={<CounselingPage />} />
-                  <Route path="/chat" element={<ChatPage />} />
                   {/* notifications handled by top-level role-aware route */}
                 </Routes>
               </Suspense>

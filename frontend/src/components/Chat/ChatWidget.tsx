@@ -1,111 +1,56 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { postChat, type StudentRef } from '../../api/chat';
+import { useChatStore } from '../../stores/chatStore';
 
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant' | 'error';
-  text: string;
-  refs?: StudentRef[];
+const SUGGESTED_QUESTIONS = [
+  '이번 학기 우리 반 영어 평균이 어때?',
+  '최근에 점수가 가장 많이 떨어진 과목은?',
+  '이번 학기 우리 반 성적 분포 알려줘',
+];
+
+interface ChatWidgetProps {
+  autoFocus?: boolean;
 }
 
-// 응답 안에 등장한 학생A.. 토큰을 실제 학생명으로 치환한다.
-// 예: "학생A는 평균이..." → "김철수는 평균이..."
-function resolveTokens(reply: string, refs: StudentRef[]): string {
-  if (refs.length === 0) return reply;
-  // 토큰을 길이 내림차순으로 정렬해 부분 치환 충돌을 피한다.
-  const refsByToken = new Map<string, string>();
-  refs.forEach((r, i) => {
-    refsByToken.set(`학생${String.fromCharCode(65 + i)}`, r.name);
-  });
-  let out = reply;
-  for (const [token, name] of refsByToken) {
-    out = out.split(token).join(name);
-  }
-  return out;
-}
+export default function ChatWidget({ autoFocus = false }: ChatWidgetProps) {
+  const messages = useChatStore((s) => s.messages);
+  const isLoading = useChatStore((s) => s.isLoading);
+  const send = useChatStore((s) => s.send);
 
-export default function ChatWidget() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [threadId, setThreadId] = useState<string | null>(null);
   const listEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
+  useEffect(() => {
+    if (autoFocus) {
+      inputRef.current?.focus();
+    }
+  }, [autoFocus]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const text = input.trim();
     if (text.length === 0 || isLoading) return;
-
-    const userMsg: ChatMessage = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text,
-    };
-    setMessages((prev) => [...prev, userMsg]);
     setInput('');
-    setIsLoading(true);
-
-    try {
-      const res = await postChat({ thread_id: threadId, message: text });
-      setThreadId(res.thread_id);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `a-${Date.now()}`,
-          role: 'assistant',
-          text: resolveTokens(res.reply, res.referenced_students),
-          refs: res.referenced_students,
-        },
-      ]);
-    } catch (err: unknown) {
-      const status =
-        typeof err === 'object' && err !== null && 'response' in err
-          ? (err as { response?: { status?: number } }).response?.status
-          : undefined;
-      const msg =
-        status === 429
-          ? '요청이 너무 잦습니다. 잠시 후 다시 시도하세요.'
-          : '답변을 가져오지 못했습니다. 잠시 후 다시 시도하세요.';
-      setMessages((prev) => [
-        ...prev,
-        { id: `e-${Date.now()}`, role: 'error', text: msg },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+    await send(text);
   }
 
   return (
-    <div className="flex flex-col h-full max-w-2xl mx-auto w-full bg-white rounded-lg border border-gray-200 shadow-sm">
-      <div className="px-4 py-3 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-        <h2 className="text-base font-semibold text-gray-900">AI 분석 비서</h2>
-        <p className="text-xs text-gray-500 mt-0.5">
-          학급 통계 기반 질의응답 (k≥5 익명화)
-        </p>
-      </div>
-
+    <div className="flex flex-col h-full min-h-0">
       <div
-        className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[320px]"
+        className="flex-1 overflow-y-auto p-3 space-y-3"
         aria-live="polite"
         aria-busy={isLoading}
       >
-        {messages.length === 0 && !isLoading && (
-          <p className="text-sm text-gray-400 text-center py-8">
-            예: "이번 학기 우리 반 영어 평균이 어때?"
-          </p>
-        )}
         {messages.map((m) => (
           <div
             key={m.id}
             className={
-              m.role === 'user'
-                ? 'flex justify-end'
-                : 'flex justify-start'
+              m.role === 'user' ? 'flex justify-end' : 'flex justify-start'
             }
           >
             <div
@@ -136,11 +81,31 @@ export default function ChatWidget() {
         <div ref={listEndRef} />
       </div>
 
+      {messages.length === 0 && !isLoading && (
+        <div className="px-3 pt-2 pb-1 flex flex-col gap-1.5">
+          <p className="text-[11px] text-gray-400 font-medium">예시 질문</p>
+          {SUGGESTED_QUESTIONS.map((q) => (
+            <button
+              key={q}
+              type="button"
+              onClick={() => {
+                setInput(q);
+                inputRef.current?.focus();
+              }}
+              className="text-left text-xs text-gray-700 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-lg px-2.5 py-1.5 transition-colors"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+
       <form
         onSubmit={handleSubmit}
         className="border-t border-gray-200 p-3 flex gap-2"
       >
         <input
+          ref={inputRef}
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
