@@ -83,8 +83,8 @@
 |--------|------|------|
 | Frontend | React 18, TS, Tailwind, Zustand, TanStack Query, Recharts | UI, 상태, 차트, 챗 위젯 |
 | Backend API | FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic | REST, 비즈니스 로직, RBAC, outbox INSERT, 챗봇 엔드포인트 |
-| Outbox Publisher | Python 3.11, aiokafka | `public.outbox` polling → Kafka topic produce |
-| Analytics Worker | Python 3.11, aiokafka | Kafka consumer (consumer group) → `analytics.*` UPSERT |
+| Outbox Publisher | Python 3.12, aiokafka | `public.outbox` polling → Kafka topic produce |
+| Analytics Worker | Python 3.12, aiokafka | Kafka consumer (consumer group) → `analytics.*` UPSERT |
 | Message Stream | Apache Kafka KRaft (단일 노드) | 운영 → 분석 이벤트 전달. Fallback: Redpanda |
 | Database | PostgreSQL — `public` (OLTP) + `public.outbox` + `analytics` (OLAP) | 단일 인스턴스 |
 | 인증 | JWT (python-jose + passlib bcrypt) | Access 1h / Refresh 7d |
@@ -104,7 +104,7 @@
 10. **OLAP 분리 (v2.1)**: 운영 트랜잭션은 `public` 스키마, 분석 집계는 `analytics` 스키마. 두 스키마는 동일 PG 인스턴스.
 11. **CDC 파이프라인 (v2.1)**: **Outbox 패턴 + Kafka KRaft**. 운영 라우터가 도메인 변경과 같은 트랜잭션으로 `public.outbox`에 INSERT → `outbox-publisher`(aiokafka)가 미발행 row를 polling해 Kafka 토픽으로 produce → `analytics-worker`(aiokafka consumer group)가 `analytics.*` UPSERT. 자세한 근거는 ADR-002.
 12. **컨테이너 (v2.1)**: 모든 서비스(`frontend`, `fastapi-api`, `outbox-publisher`, `analytics-worker`, `kafka`, `postgres`)는 단일 `docker-compose.yml`로 묶는다. 확장성은 `docker-compose up --scale analytics-worker=3`으로 시연.
-13. **Chatbot (v2.1)**: 별도 서비스 분리하지 않고 FastAPI 백엔드의 단일 라우터(`POST /api/v1/chat`)로 구현. 답변 범위를 학급 단위 통계로 제한(k≥5 실질). 컨텍스트 학생명·학번은 `chatbot/sanitizer.py`에서 단순 치환(`학생A`, `seq_001`).
+13. **Chatbot (v2.1)**: 별도 서비스 분리하지 않고 FastAPI 백엔드의 단일 라우터(`POST /api/v1/chat`)로 구현. 컨텍스트 추출 범위는 교사 담임 학급으로 한정 + 학생 수 k가 5 미만이면 LLM 호출 자체 거부(k≥5 가드). 컨텍스트 학생명·학번은 `app/services/llm_sanitizer.py`에서 단순 치환(`학생A`..`학생Z`, 26명 초과 시 `학생AA`..`학생ZZ`로 확장; `seq_001`).
 
 ---
 
@@ -1508,23 +1508,24 @@ ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
 | GET | `/api/v1/analytics/teachers/me/dashboard` | 교사 메인 위젯 (담당 학급 요약) | teacher |
 | GET | `/api/v1/analytics/students/{id}/overview` | 학생 학습 요약 (학기 추이) | teacher (담당) |
 | GET | `/api/v1/analytics/classes/{id}/distribution` | 학급 점수 분포 | teacher (담임) |
-| GET | `/api/v1/analytics/subjects/{id}/trend` | 과목 평균 추이 | teacher (담임) |
 
 응답은 `analytics.agg_*` 테이블에서 직접 조회. 무거운 집계 쿼리 금지.
+
+> 과목 추이(`/analytics/subjects/{id}/trend`)는 미구현 — 평가 후 트랙. 학생별 학기 추이는 `students/{id}/overview` 응답의 `semester_history`로 갈음한다.
 
 ### 9.6 일관성 보장
 
 | 항목 | 정책 | 검증 |
 |------|------|------|
 | 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (Kafka 발행 + consumer 처리는 통상 sub-second) | `test_pipeline_propagates_grade_event_within_sla` (SMS-54) |
-| 정합성 검증 | testcontainers 통합 테스트 + `scripts/check_consistency.py` (운영 row vs fact row 비교) | `tests/integration/*` (Sprint 1·2) |
+| 정합성 검증 | testcontainers 통합 테스트가 운영 row 수 vs `analytics.fact_*` row 수를 자동 비교 (별도 CLI 스크립트 미도입) | `backend/tests/integration/*` (Sprint 1·2, `pytest -m integration`) |
 | Idempotency (중복 메시지) | 모든 fact 테이블이 `event_id` PK + `ON CONFLICT DO NOTHING`. consumer가 no-op 감지 시 agg recompute skip → fact rowcount·agg 값 모두 불변 | `test_idempotency_e2e.py` 5개 시나리오 (SMS-81) |
 | Publisher 다운 | outbox row commit됨 → 부팅 시 `WHERE sent_at IS NULL` 자동 catch-up | `test_publisher_drains_backlog_after_late_start` (SMS-54) |
 | Consumer 다운 | Kafka offset 보관 → 재기동 시 마지막 commit offset부터 재구독, 이벤트 누락 0 | `test_consumer_resumes_after_restart_without_loss` (SMS-54) |
 | Broker 다운 | publisher가 producer.send에서 retry. 운영 트랜잭션은 정상 commit (outbox row 누적) | SMS-52 catch-up 단위 테스트 |
 | Poison message | decode 실패 / 필수 필드 누락 / 알 수 없는 topic → `analytics.dead_letter_event` 기록 + offset commit. main consumer는 차단되지 않음 | `test_malformed_payload_routes_to_dead_letter_table` (SMS-81) |
 | Transient error (DB 일시 오류 등) | offset commit 안 함 + exponential backoff. 다음 iteration에서 재시도 | run() 루프 코드 |
-| 백필 | Alembic data migration 스크립트 (`scripts/backfill_analytics.py`): 운영 테이블 전체 스캔 → outbox INSERT (publisher가 catch-up) | (구현 예정) |
+| 백필 | **평가 후 트랙**. 평가용 시드는 `scripts/demo_seed.py`가 운영 INSERT와 함께 outbox row를 stage하므로 publisher/consumer가 정상 흐름으로 채운다. 실운영 도입 시 전체 스캔 → outbox 발행 스크립트 필요 | 미구현 |
 
 ---
 
@@ -1546,65 +1547,89 @@ ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
         │ 5. LLM SDK 호출 (provider는 환경변수로 단일 선택)
         │ 6. 응답 후처리 (token → 실제 학생 매핑)
         ▼
-[LLM Provider (외부, OpenAI 또는 Anthropic)]
+[LLM Provider (외부, OpenAI 호환 endpoint — 단일)]
 ```
 
-### 10.2 LLM 호출 (단일 provider 직접 호출)
+### 10.2 LLM 호출 (OpenAI 호환 endpoint, 단일)
 
-별도 `LLMClient` 추상화 인터페이스는 도입하지 않는다. 환경변수 `LLM_PROVIDER`로 하나의 SDK를 선택해 직접 호출.
+`OPENAI_API_KEY` + `LLM_BASE_URL`(기본 `https://api.openai.com/v1`, Kimi/Together/Groq 등 호환 게이트웨이로 전환 가능)로 OpenAI SDK 하나를 호출한다. 키 미설정 또는 `LLM_PROVIDER=stub`이면 결정론적 `StubLlmClient`로 폴백.
+
+테스트 용이성을 위해 `LlmClient` Protocol을 두고 의존성 주입(`tests/test_chat.py`가 `app.dependency_overrides[get_llm_client]`로 `FakeLlm` 주입) — 의도된 진화.
 
 ```python
-# app/chatbot/llm.py — pseudo
-async def complete(prompt: str, context: list[dict]) -> str:
-    provider = settings.LLM_PROVIDER  # "openai" | "anthropic"
-    if provider == "openai":
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        resp = await client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            messages=[{"role": "system", "content": system_prompt(context)},
-                      {"role": "user", "content": prompt}],
-            max_tokens=1024,
-        )
-        return resp.choices[0].message.content
-    elif provider == "anthropic":
-        client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        resp = await client.messages.create(
-            model=settings.LLM_MODEL,
-            max_tokens=1024,
-            system=system_prompt(context),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.content[0].text
-    raise ValueError(f"unknown provider: {provider}")
+# app/services/llm_client.py — 실제 구조 (요약)
+class LlmClient(Protocol):
+    async def complete(self, *, system: str, user: str) -> str: ...
+
+class StubLlmClient:
+    async def complete(self, *, system, user) -> str:
+        return f"[stub] ctx_chars={len(system)} msg={user[:80]}"
+
+class OpenAiLlmClient:
+    def __init__(self, *, api_key, base_url, model, timeout_seconds, max_tokens):
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
+        ...
+    async def complete(self, *, system, user) -> str:
+        try:
+            resp = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+                max_tokens=self._max_tokens,
+            )
+        except APITimeoutError as exc:
+            raise AppException(504, "LLM 응답 시간 초과", "CHAT_TIMEOUT") from exc
+        except APIError as exc:
+            raise AppException(502, "LLM 서비스 오류", "CHAT_UPSTREAM_ERROR") from exc
+        return resp.choices[0].message.content or ""
 ```
+
+Anthropic 어댑터는 평가 후 트랙. 현재는 OpenAI 호환 endpoint 하나만 지원한다.
 
 ### 10.3 PII 마스킹 규약
 
 ```python
-# app/chatbot/sanitizer.py — pseudo
+# app/services/llm_sanitizer.py — 실제 구조 (요약)
+MIN_SAMPLE_SIZE = 5
+_PII_FIELDS = ("student_id", "email", "phone")
+_SUBJECT_NOISE_FIELDS = ("subject_id",)  # SMS-96 — UUID는 LLM이 ground 불가
+
+class SmallSampleError(Exception): ...
+
+def _index_to_token(i: int) -> str:
+    """1-indexed → 학생A..Z (i≤26), 학생AA..ZZ (i≤702). chr(64+i) 한 글자만 쓰면
+    i≥27에서 [A-Z] 밖 문자가 생성돼 라우터 정규식이 silent drop 한다."""
+
 def mask_context(rows: list[dict]) -> tuple[list[dict], dict[str, UUID]]:
-    """학급 단위 통계만 받음. 단일 학생 식별 불가능한 응답이 보장되도록 사전에 k≥5 필터."""
+    if len(rows) < MIN_SAMPLE_SIZE:
+        raise SmallSampleError(...)  # 라우터가 잡아 거부 메시지 반환
     token_map: dict[str, UUID] = {}
-    masked_rows = []
+    masked_rows: list[dict] = []
     for i, row in enumerate(rows, start=1):
-        token = f"학생{chr(64 + i)}"  # 학생A, 학생B, ...
-        if "student_id" in row:
-            token_map[token] = row["student_id"]
-            row = {**row, "student_name": token, "student_number": f"seq_{i:03d}"}
-            row.pop("student_id", None)
-            row.pop("email", None)
-            row.pop("phone", None)
-        masked_rows.append(row)
+        if "student_id" not in row:        # 집계 행은 통과
+            masked_rows.append(row); continue
+        token = _index_to_token(i)
+        token_map[token] = row["student_id"]
+        new_row = {**row, "student_name": token, "student_number": f"seq_{i:03d}"}
+        for f in _PII_FIELDS: new_row.pop(f, None)
+        if isinstance(new_row.get("subjects"), list):
+            new_row["subjects"] = [
+                {k: v for k, v in s.items() if k not in _SUBJECT_NOISE_FIELDS}
+                for s in new_row["subjects"]
+            ]
+        masked_rows.append(new_row)
     return masked_rows, token_map
 ```
 
 | 원본 | 마스킹 |
 |------|--------|
-| `김철수` (학생명) | `학생A` |
+| `김철수` (학생명) | `학생A`, `학생B`, …, `학생Z`, `학생AA`, … (~702명까지 안전) |
 | `student_number=15` | `seq_015` |
 | 학부모 이메일/전화 | (컨텍스트에서 제거) |
 | `student_id` (UUID) | (컨텍스트에서 제거, 서버 메모리 매핑만 유지) |
+| `subjects[].subject_id` (UUID) | (컨텍스트에서 제거, SMS-96) |
 | 교사명 | 유지 (질의자 본인) |
+| 학생 수 < 5 (k≥5 미달) | `SmallSampleError` → LLM 호출 안 함, 거부 메시지 반환 |
 
 응답 후처리에서 `학생A` 등의 token을 매핑 테이블로 실제 학생 객체로 치환하여 클라이언트에 전달.
 
