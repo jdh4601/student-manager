@@ -28,83 +28,20 @@
 
 ## 1. System Overview
 
-### 아키텍처 구성 (v2.1)
+> **다이어그램·기술 스택은 다른 문서로 위임**
+> - 컨테이너 다이어그램 + 데이터 흐름: `architecture.md` §3 (C4 Level 2), §4 (모듈 흐름)
+> - 기술 스택 표: `prd.md` §7
+> - 멀티테넌트 격리·인증 토큰 전략·30초 폴링·9등급 계산·교사 스코핑·OLAP 분리·CDC 파이프라인·컨테이너 구성·챗봇 범위: `prd.md` §7 "핵심 결정사항"
 
-```
-                  [Browser]
-                      │  HTTPS / REST
-                      ▼
-   ┌─────────────────────────────────────────────────────┐
-   │  docker-compose (로컬)                              │
-   │                                                     │
-   │  ┌─────────────────┐                                │
-   │  │ frontend (Vite) │                                │
-   │  │ React 18 + TS   │                                │
-   │  └────────┬────────┘                                │
-   │           │ /api/v1                                 │
-   │           ▼                                         │
-   │  ┌─────────────────────────────────────┐            │
-   │  │ fastapi-api                         │            │
-   │  │  - 운영 라우터 (grades, ...)        │            │
-   │  │  - /api/v1/analytics/* (read agg)   │            │
-   │  │  - /api/v1/chat (LLM 호출)          │            │
-   │  └──┬──────────────┬────────────────┬──┘            │
-   │     │ SQL          │ outbox INSERT  │ HTTPS         │
-   │     ▼              ▼                ▼               │
-   │  ┌──────────────────────┐    [LLM Provider (외부)]  │
-   │  │ Postgres             │                           │
-   │  │  public.*  (OLTP)    │                           │
-   │  │  public.outbox       │                           │
-   │  │  analytics.* (OLAP)  │                           │
-   │  └──┬──────────────▲────┘                           │
-   │     │ poll unsent  │ UPSERT agg                     │
-   │     ▼              │                                │
-   │  ┌─────────────┐   │                                │
-   │  │ outbox-     │   │                                │
-   │  │ publisher   │   │                                │
-   │  │ (aiokafka)  │   │                                │
-   │  └──────┬──────┘   │                                │
-   │         │ produce  │                                │
-   │         ▼          │                                │
-   │  ┌──────────────┐  │                                │
-   │  │ Kafka KRaft  │  │                                │
-   │  │ (단일 노드)  │  │ Fallback: Redpanda             │
-   │  └──────┬───────┘  │                                │
-   │         │ consume  │                                │
-   │         ▼          │                                │
-   │  ┌──────────────────┐                               │
-   │  │ analytics-worker │                               │
-   │  │ (aiokafka cons.) │  scale=N (consumer group)     │
-   │  └──────────────────┘                               │
-   └─────────────────────────────────────────────────────┘
-```
+본 절은 위 문서에 없는 **구현·운영 디테일**만 보존한다.
 
-| 레이어 | 기술 | 역할 |
-|--------|------|------|
-| Frontend | React 18, TS, Tailwind, Zustand, TanStack Query, Recharts | UI, 상태, 차트, 챗 위젯 |
-| Backend API | FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic | REST, 비즈니스 로직, RBAC, outbox INSERT, 챗봇 엔드포인트 |
-| Outbox Publisher | Python 3.12, aiokafka | `public.outbox` polling → Kafka topic produce |
-| Analytics Worker | Python 3.12, aiokafka | Kafka consumer (consumer group) → `analytics.*` UPSERT |
-| Message Stream | Apache Kafka KRaft (단일 노드) | 운영 → 분석 이벤트 전달. Fallback: Redpanda |
-| Database | PostgreSQL — `public` (OLTP) + `public.outbox` + `analytics` (OLAP) | 단일 인스턴스 |
-| 인증 | JWT (python-jose + passlib bcrypt) | Access 1h / Refresh 7d |
-| 배포 | docker-compose (로컬 평가) | 모든 서비스 단일 compose 파일 |
+### 핵심 설계 결정사항 (구현 디테일)
 
-### 핵심 설계 결정사항
-
-1. **멀티테넌트 격리**: 단일 DB + `school_id` Row-Level Filtering. FastAPI 레이어에서 1차 스코핑 필수. Postgres RLS는 선택적 보조 레이어 (평가 후 검토).
-2. **인증**: JWT Bearer 토큰. `access_token`은 메모리(Zustand store) 저장. `refresh_token`은 HttpOnly Cookie. localStorage 금지.
-3. **실시간**: **30초 폴링** 방식으로 인앱 알림 구현 (SSE/WebSocket push는 평가 후).
-4. **성적 등급**: 원점수 기준 9등급 참고값 제공 (석차 기반 아님). 추후 전환 가능하도록 계산 로직 서비스 레이어에서 분리.
-5. **파일 생성**: 클라이언트 사이드 전용 (SheetJS: Excel, jsPDF: PDF). 서버는 JSON 데이터만 제공, 파일 변환은 브라우저에서 수행.
-6. **초기 설정 전략**: School 및 교사 계정은 Alembic seed script로 생성. 교사가 앱 내에서 학급/과목/학기를 직접 설정.
-7. **교사 스코핑 (MVP 제약)**: 담임 교사 1명 = 담당 Class 1개 구조. 교과 교사 다중 반 담당은 평가 후 ClassTeacher M:M 테이블로 확장 예정.
-8. **CORS**: 로컬 docker-compose 환경에서 frontend origin만 허용 (`ALLOWED_ORIGINS` 환경변수).
-9. **Rate Limiting**: 로그인 엔드포인트와 `/api/v1/chat`에 IP/사용자 기반 제한 (slowapi 라이브러리 사용).
-10. **OLAP 분리 (v2.1)**: 운영 트랜잭션은 `public` 스키마, 분석 집계는 `analytics` 스키마. 두 스키마는 동일 PG 인스턴스.
-11. **CDC 파이프라인 (v2.1)**: **Outbox 패턴 + Kafka KRaft**. 운영 라우터가 도메인 변경과 같은 트랜잭션으로 `public.outbox`에 INSERT → `outbox-publisher`(aiokafka)가 미발행 row를 polling해 Kafka 토픽으로 produce → `analytics-worker`(aiokafka consumer group)가 `analytics.*` UPSERT. 자세한 근거는 ADR-002.
-12. **컨테이너 (v2.1)**: 모든 서비스(`frontend`, `fastapi-api`, `outbox-publisher`, `analytics-worker`, `kafka`, `postgres`)는 단일 `docker-compose.yml`로 묶는다. 확장성은 `docker-compose up --scale analytics-worker=3`으로 시연.
-13. **Chatbot (v2.1)**: 별도 서비스 분리하지 않고 FastAPI 백엔드의 단일 라우터(`POST /api/v1/chat`)로 구현. 컨텍스트 추출 범위는 교사 담임 학급으로 한정 + 학생 수 k가 5 미만이면 LLM 호출 자체 거부(k≥5 가드). 컨텍스트 학생명·학번은 `app/services/llm_sanitizer.py`에서 단순 치환(`학생A`..`학생Z`, 26명 초과 시 `학생AA`..`학생ZZ`로 확장; `seq_001`).
+1. **초기 설정 전략**: School + 최초 교사(teacher) 계정은 Alembic seed script로 생성 (CLI, 배포 시 1회 실행). 교사가 앱 로그인 후 Semester → Class → Subject 순으로 직접 생성. **앱 내 관리자 UI 없음** (MVP 범위 외).
+2. **CORS**: 로컬 docker-compose 환경에서 frontend origin만 허용 (`ALLOWED_ORIGINS` 환경변수, JSON 배열 문자열).
+3. **Rate Limiting**: 로그인 엔드포인트와 `/api/v1/chat`에 slowapi 기반 제한. 챗봇은 사용자 ID 키, 로그인은 IP 키.
+4. **타 학교 데이터 접근**: 404 반환 (403 대신 — 존재 자체를 숨김. IDOR 방지). §4.3과 일관.
+5. **챗봇 마스킹 토큰 확장**: 학생 26명 초과 시 `학생A..Z` → `학생AA..ZZ`로 두 글자 확장 (~702명까지 안전). 라우터 정규식 `학생[A-Z]{1,2}`로 양쪽 매칭. 상세 §10.3.
 
 ---
 
@@ -298,14 +235,27 @@ counseling_updated BOOLEAN    NOT NULL  DEFAULT true
 
 ## 3. API Specification
 
+> **OpenAPI 자동 생성**: 모든 엔드포인트의 요청·응답 Pydantic 스키마는 백엔드 기동 후 `http://localhost:8000/docs` (Swagger UI) 또는 `/openapi.json`에서 확인 가능. 본 절은 OpenAPI에 표현되지 않는 **에러 코드 / RBAC 뉘앙스 / side effect / 도메인 규칙**을 명시한다.
+
 ### 공통 규칙
 
 - **Base URL**: `/api/v1`
 - **Content-Type**: `application/json` (파일 업로드 제외)
-- **인증**: `Authorization: Bearer <access_token>` (로그인, 리프레시 제외)
+- **인증**: `Authorization: Bearer <access_token>` (로그인, 리프레시, 자명한 표 아래 단순 엔드포인트 제외)
 - **오류 응답 형식**: `{ "detail": "message", "code": "ERROR_CODE" }`
-- **페이지네이션**: MVP 구현은 대부분 목록을 배열로 반환합니다. `skip/limit`은 future contract로 남겨두고, 현재 코드 기준으로는 배열 응답을 우선합니다.
-- **페이지네이션 일관성**: 현재 구현 기준 목록 조회는 배열 형식입니다. 단건/요약은 객체 직접 반환.
+- **페이지네이션**: 목록 조회는 배열 형식. 단건/요약은 객체 직접 반환. `skip/limit`은 future contract.
+
+### 단순 엔드포인트 인벤토리
+
+요청·응답이 자명하고 별도 contract가 없는 엔드포인트는 다음 표로 갈음한다. 상세 스키마는 `/docs` 참조.
+
+| Method | Path | 설명 | Authorization |
+|--------|------|------|---------------|
+| POST | `/auth/logout` | refresh_token 쿠키 삭제, 204 | 인증된 모든 사용자 |
+| GET | `/auth/me` | 본인 user 정보 | 인증된 모든 사용자 |
+| GET | `/semesters` | 학기 목록 | 인증된 모든 사용자 |
+| PATCH | `/notifications/read-all` | 본인 알림 전체 읽음 처리 | 인증된 모든 사용자 |
+| GET | `/notifications/preferences` | 본인 알림 설정 조회 | 인증된 모든 사용자 |
 
 ---
 
@@ -345,21 +295,7 @@ Response 401: { "code": "AUTH_TOKEN_EXPIRED" }
 Authorization: None
 ```
 
-#### POST /auth/logout
-```
-Response 204
-Set-Cookie: refresh_token=; Max-Age=0  -- 쿠키 삭제
-
-Authorization: Any authenticated user
-```
-
-#### GET /auth/me
-```
-Response 200:
-  { "id": "uuid", "email": "string", "name": "string", "role": "string", "school_id": "uuid" }
-
-Authorization: Any authenticated user
-```
+> `POST /auth/logout`, `GET /auth/me` — §3 머리말 "단순 엔드포인트 인벤토리" 표 참조.
 
 ---
 
@@ -379,12 +315,7 @@ Response 409: { "code": "SEMESTER_DUPLICATE" }
 Authorization: teacher
 ```
 
-#### GET /semesters
-```
-Response 200: [{ "id": "uuid", "year": "integer", "term": "integer" }]
-
-Authorization: Any authenticated user
-```
+> `GET /semesters` — 인벤토리 표 참조.
 
 #### POST /classes
 ```
@@ -846,19 +777,7 @@ Response 403: { "code": "NOTIFICATION_NOT_OWNER" }
 Authorization: Any authenticated user (본인 알림만)
 ```
 
-#### PATCH /notifications/read-all
-```
-Response 200: { "updated_count": "integer" }
-Authorization: Any authenticated user
-```
-
-#### GET /notifications/preferences
-```
-Response 200:
-  { "grade_input": "boolean", "feedback_created": "boolean", "counseling_updated": "boolean" }
-
-Authorization: Any authenticated user
-```
+> `PATCH /notifications/read-all`, `GET /notifications/preferences` — 인벤토리 표 참조.
 
 #### PUT /notifications/preferences
 ```
