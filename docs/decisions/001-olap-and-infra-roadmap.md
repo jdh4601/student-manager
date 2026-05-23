@@ -3,7 +3,7 @@
 **상태**: Accepted
 **작성일**: 2026-05-03
 **작성자**: DongHyun Jung
-**선행 결정**: `notes/2026-05-03-v2.1-architecture-grill.md`
+**선행 결정**: `history/2026-05-03-v2.1-architecture-grill.md`
 **연관 ADR**: ADR-002 (CDC 패턴 — Outbox + Kafka)
 
 ---
@@ -142,7 +142,7 @@ Critical path: **W2 → W5** (DB → publisher → worker → API → UI).
 ## References
 
 - 평가 rubric (메시지 스트림 가점 — *"Apache Kafka와 같은 메시지 스트림"*; EKS 비필수)
-- `docs/notes/2026-05-03-v2.1-architecture-grill.md` (결정 트리 Q1~Q8)
+- `docs/decisions/history/2026-05-03-v2.1-architecture-grill.md` (결정 트리 Q1~Q8)
 - `docs/decisions/002-cdc-pattern-outbox-kafka.md` (CDC 대안 비교)
 - PRD v2.1 §10 (OLAP & 분석), §11 (AI 어시스턴트)
 - Design Spec v2.1 §9 (Analytics Layer), §10 (Chatbot)

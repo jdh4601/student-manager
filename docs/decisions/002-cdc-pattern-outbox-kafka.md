@@ -4,7 +4,7 @@
 **작성일**: 2026-05-03
 **작성자**: DongHyun Jung
 **선행 결정**: ADR-001 (OLAP 분석 파이프라인 + 인프라 방향)
-**선행 노트**: `notes/2026-05-03-v2.1-architecture-grill.md` (Q4)
+**선행 노트**: `history/2026-05-03-v2.1-architecture-grill.md` (Q4)
 
 ---
 
@@ -183,6 +183,6 @@ async def main() -> None:
 ## References
 
 - ADR-001 §Decision 2 (메시지 스트림 도입)
-- `notes/2026-05-03-v2.1-architecture-grill.md` Q4 (CDC 패턴 결정 트리)
+- `history/2026-05-03-v2.1-architecture-grill.md` Q4 (CDC 패턴 결정 트리)
 - Architecture v1.1 §4.1 (운영 흐름 — Outbox + Kafka)
 - Design Spec v2.1 §9 (Analytics Layer — Outbox DDL + publisher/consumer)
