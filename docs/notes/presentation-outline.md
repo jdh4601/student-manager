@@ -76,6 +76,8 @@
 
 > 관통하는 원칙: **컴포넌트 수를 늘리지 않는다.** 새 인프라를 추가할 때마다 secret·모니터링·장애 표면이 늘어난다 → 규모가 정당화할 때까지 보류(YAGNI).
 
+> **운영/분석 스키마 분리 — 평가 기준 충족**: 운영=`public`, 분석=`analytics`로 **같은 Postgres 안에서 스키마 구분**. 평가 기준이 *"물리적 분리는 불필요, 동일 DB 내 스키마 구분 가능"*이라 명시 → 허용된 방식을 그대로 채택(right-sizing). 증거: `alembic 0004 CREATE SCHEMA analytics`, 조회는 `analytics_query.py`가 `FROM analytics.agg_*`. 부하 증가 시 `analytics`만 read replica로 분리(§7). *기준 최소요건(스키마 구분)을 넘어 CDC로 OLTP/OLAP 워크로드까지 분리.*
+
 ---
 
 ## 5. 아키텍처 의사결정: Kafka → LISTEN/NOTIFY (3분) ★ 중점 ② · 발표 하이라이트
@@ -183,3 +185,53 @@
 | scale은 어떻게 보장하나? | N 워커가 같은 NOTIFY를 받아도 SKIP LOCKED로 정확히 1개만 처리 = consumer group 등가 |
 | 왜 처음부터 LISTEN/NOTIFY를 안 했나? | 처음엔 rubric 문구상 Kafka가 가점에 안전해 보였다. 재해석 후 핵심이 'event-driven 구조'임을 확인, 규모를 보고 전환 (이 솔직함이 강점) |
 | 왜 AWS가 아니라 Render인가? | 같은 right-sizing. 이 규모에 ECS+RDS+NAT GW는 비용·운영 과중. worker 영속 연결 때문에 순수 서버리스도 부적합 |
+| 운영 DB와 분석 DB를 왜 물리적으로 안 나눴나? | 평가 기준이 동일 DB 내 스키마 분리를 허용. `public`/`analytics` 스키마로 구분 + CDC로 OLTP/OLAP 워크로드 분리. 물리 분리는 규모가 정당화할 때(read replica/별도 인스턴스) |
+
+---
+
+## 부록 B. AI 비서 요청의 전 과정 — "이번 학기 우리 반 영어 평균이 어때?"
+
+> 시연 #5의 한 문장 뒤에서 실제로 일어나는 일. "그래서 AI가 *어떻게* 안전한가?"라는 질문이 나올 때의 대본. 코드 경로: `frontend/src/stores/chatStore.ts` → `backend/app/routers/chat.py` → `services/*`.
+
+### 요청 → 응답 (순차)
+
+1. **FE 위젯 → API 호출** (`chatStore.send` → `api/chat.ts:postChat`)
+   - `POST /api/v1/chat`, body `{ thread_id, message: "이번 학기 우리 반 영어 평균이 어때?" }`.
+   - access_token은 **메모리(Zustand)** 에서 `Authorization: Bearer` 헤더로 실림 (refresh 쿠키는 건드리지 않음).
+
+2. **레이트 리밋** (`ratelimit.py`, slowapi) — 교사당 **10회/분** (`user_id_key`). 초과 시 429 → FE "요청이 너무 잦습니다".
+
+3. **인증 + RBAC** (`require_role("teacher")`) — JWT 검증 → `role + school_id + user_id` 추출 → teacher 화이트리스트. 비-교사면 403.
+
+4. **의도 분류: 학기 선택** (`chat_intent.resolve_semester_id`, 룰 기반) — 메시지의 **"이번"** → `Semester`를 year·term DESC 정렬한 **최신 학기** 선택. LLM tool calling 없이 비용 0·지연 0.
+
+5. **컨텍스트 조회** (`chat_context.fetch_student_rows`) — **RBAC row-level scope**
+   - `WHERE Class.teacher_id = 나 AND User.school_id = 내 학교` 로 **담임 학급 학생만**.
+   - `analytics.agg_*` 읽기 캐시에서 집계 **2쿼리**(`get_overall_batch` + `get_subjects_batch`)로 N+1 회피 → 학생별 `{ overall, subjects[] }` (과목별 평균·최고·최저·표본수). 운영 테이블(`public`)은 건드리지 않음.
+
+6. **PII 마스킹 + k≥5 익명성 가드** (`llm_sanitizer.mask_context`) ★ 보안 핵심
+   - 학생 **5명 미만이면 `SmallSampleError` → LLM 호출 자체를 거부**("개인 식별을 막기 위해…"). 우리 반 30명이라 통과(시연 #6은 이 분기를 보여줌).
+   - 각 학생: 이름 → `학생A`, 학번 → `seq_001`, **student_id·email·phone 삭제**, subjects의 `subject_id`(UUID) 제거.
+   - `token_map`(학생A → 실제 UUID)은 **서버 메모리에만** 보관, 외부 전송 X.
+
+7. **프롬프트 구성 + LLM 호출** (`routers/chat.py` → `llm_client.OpenAiLlmClient`)
+   - system = 한국어 분석 비서 지시 + `[학급 통계]` 마스킹 JSON / user = 원본 질문.
+   - `LLM_PROVIDER=auto` + 키 존재 → OpenAI(`gpt-4o-mini`, max_tokens 1024, timeout 10s). `LLM_BASE_URL`만 바꾸면 다른 호환 게이트웨이로 교체.
+   - **외부로 나가는 페이로드엔 학생 식별정보 0건**(마스킹 토큰뿐) — `tests/test_llm_sanitizer.py`가 보증.
+   - 모델이 마스킹 통계에서 `name=="영어"` 행의 `avg_score`를 학생들에 걸쳐 집계해 평균을 답함. (서버가 학급 영어 평균을 미리 계산해 주지 않음 — 모델이 JSON 위에서 산출하는 구조)
+
+8. **응답 후처리: 토큰 역매핑** (`routers/chat.py`) — 응답 텍스트의 `학생A` 등 토큰(`학생[A-Z]{1,2}`)을 `token_map`으로 실제 학생에 매핑해 `referenced_students[]`(id+이름)만 구조화 반환.
+
+9. **FE 표시** (`chatStore`) — `referenced_students`로 토큰을 실제 이름으로 치환해 말풍선 렌더.
+
+### 실패 분기 (정직하게)
+| 상황 | 결과 |
+|------|------|
+| 학생 < 5명 | k≥5 거부 메시지 (시연 #6) |
+| OpenAI 타임아웃 | 504 `CHAT_TIMEOUT` |
+| 업스트림 오류(쿼터·인증 등) | 502 `CHAT_UPSTREAM_ERROR` |
+| 키 없음 / `LLM_PROVIDER=stub` | 결정론적 stub 폴백 (데모·테스트용) |
+
+### 발표 포인트
+- **"AI가 학생 개인정보를 외부로 보내지 않나?"** → 3중 안전장치: ① 컨텍스트를 담임 학급으로 한정 + ② 전송 전 이름·식별자 토큰 치환 + ③ k<5 거부. 역매핑은 **서버 메모리에서만**.
+- 별도 AI 마이크로서비스 없이 **FastAPI 단일 엔드포인트** — right-sizing 원칙의 연장(부록 A·§4와 동일한 메시지).
