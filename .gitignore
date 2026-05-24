@@ -4,6 +4,7 @@ __pycache__/
 
 # Dev environment
 .omx/
+backend/.omc/
 .env
 .claude/settings.local.json
 
@@ -14,7 +15,9 @@ backend/test.db
 backend/.env
 
 # Node
+/node_modules/
 frontend/node_modules/
+frontend/e2e-artifacts/
 frontend/.env
 frontend/dist/
 frontend/test-results/
