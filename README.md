@@ -1,6 +1,17 @@
 # Student Manager
 
-학생 성적·상담 통합 관리 웹앱. FastAPI 백엔드 + React/Vite 프론트엔드 + Kafka 기반 분석 파이프라인 + LLM 챗봇.
+학생 성적·상담 통합 관리 웹앱. FastAPI 백엔드 + React/Vite 프론트엔드 + **Postgres LISTEN/NOTIFY 기반 이벤트 분석 파이프라인** + LLM 챗봇.
+
+## Deployment Topology
+
+두 surface 모두 동일 컴포넌트 토폴로지·코드·마이그레이션을 사용한다 — 분기는 환경변수만 차이.
+
+| Surface | 용도 | 구성 |
+|---------|------|------|
+| **Cloud** (Vercel + Render) | 외부 reviewer 접근용 라이브 demo URL | Vercel(Frontend) + Render(Backend Web) + Render(outbox-publisher worker) + Render(analytics-worker worker) + Render Postgres |
+| **Local** (docker-compose) | 일상 개발 + 분산 시연 (`--scale analytics-worker=N`) | 위 5개 컴포넌트 동등 + Vite dev server (Kafka·외부 브로커 불필요 — Postgres NOTIFY를 message bus로) |
+
+자세한 CDC 아키텍처: [`docs/architecture.md`](docs/architecture.md), [`docs/decisions/003-cdc-replace-kafka-with-listen-notify.md`](docs/decisions/003-cdc-replace-kafka-with-listen-notify.md)
 
 ## Quick demo (5 min)
 
@@ -13,7 +24,7 @@
 git clone https://github.com/jdh4601/student-manager.git
 cd student-manager
 
-# 2) 데모용 풀스택 기동 (analytics-worker 3개로 분산 처리 시연 포함)
+# 2) 데모용 풀스택 기동 (analytics-worker 3개로 SKIP LOCKED 분산 처리 시연 포함)
 docker compose -f docker-compose.yml -f docker-compose.demo.yml \
     up -d --scale analytics-worker=3
 
@@ -26,7 +37,7 @@ docker compose exec backend python /scripts/demo_seed.py
 | 1 | 로그인 | http://localhost:5173 → `demo-teacher@example.com` / `password123` |
 | 2 | 분석 대시보드 | `/analytics` — 6학기 평균/분포 차트 (Recharts) |
 | 3 | AI 비서에 질의 | `/chat` → "이번 학기 평균 좀 알려줘" |
-| 4 | 분산 처리 시연 | 새 터미널에서 `make demo-scale-logs` — 3개 워커가 파티션 분산 소비 |
+| 4 | 분산 처리 시연 | 새 터미널에서 `make demo-scale-logs` — 3개 워커가 SKIP LOCKED로 작업 분배 |
 | 5 | 정리 | `make demo-scale-down` |
 
 발표 시 상세 시나리오와 사고 대응:
@@ -37,7 +48,7 @@ docker compose exec backend python /scripts/demo_seed.py
 
 ## Quick Start (개발용)
 
-`KAFKA_NUM_PARTITIONS=3`로 분석 파이프라인까지 한 번에 띄우는 단일 인스턴스 모드:
+분석 파이프라인까지 한 번에 띄우는 단일 인스턴스 모드:
 
 ```bash
 docker compose up --build
@@ -45,8 +56,14 @@ docker compose up --build
 
 - 프론트엔드: `http://localhost:5173`
 - 백엔드 / Swagger: `http://localhost:18000` / `http://localhost:18000/docs`
-- Kafka (KRaft 단일 노드): 컨테이너 내부 `kafka:9092`, 호스트 `localhost:29092`
+- Postgres: 컨테이너 내부 `db:5432`, 호스트 `localhost:5432` (메시지 브로커 겸용 — `NOTIFY` 채널 4개)
 - 기본 교사 계정: `teacher@example.com` / `password123` (RBAC E2E용 `teacher2@example.com`도 시드됨)
+
+LISTEN/NOTIFY 회선 헬스 체크:
+
+```bash
+python scripts/listen_notify_smoke.py   # round-trip OK → exit 0
+```
 
 로컬 QA 실행:
 
@@ -54,7 +71,7 @@ docker compose up --build
 npm run qa
 ```
 
-백엔드 `ruff` + `pytest`, 프론트엔드 `tsc --noEmit`을 순서대로 실행합니다.
+백엔드 `ruff` + `pytest`, 프론트엔드 `tsc --noEmit`을 순서대로 실행합니다. 통합 테스트(`pytest -m integration`)는 testcontainers Postgres 단일 컨테이너만 띄웁니다 (Kafka 미사용).
 
 ## AI 챗봇 / LLM API 키
 
@@ -104,6 +121,6 @@ LLM_MODEL=moonshot-v1-8k
 
 ## CI/CD
 
-`main` 브랜치에 push하면 CI(lint + test + typecheck) → CD(Vercel 프론트 + Render 백엔드) 순으로 자동 배포됩니다.
+`main` 브랜치에 push하면 CI(lint + test + typecheck) → CD(Vercel 프론트 + Render Web/Worker 자동 재배포) 순으로 자동 배포됩니다. Render는 `render.yaml`의 3개 서비스(web + outbox-publisher worker + analytics-worker worker)를 일괄 redeploy합니다.
 
 필요한 GitHub Secrets: `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `RENDER_API_KEY`, `RENDER_SERVICE_ID`

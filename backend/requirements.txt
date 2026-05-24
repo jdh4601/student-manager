@@ -14,7 +14,6 @@ slowapi==0.1.9
 httpx==0.28.1
 openai==2.14.0
 openpyxl==3.1.5
-aiokafka==0.12.0
 
 # dev
 pytest==8.3.4
@@ -24,4 +23,4 @@ ruff==0.8.6
 aiosqlite==0.21.0
 
 # integration tests (opt-in via -m integration; requires Docker)
-testcontainers[kafka,postgres]==4.9.0
+testcontainers[postgres]==4.9.0

@@ -1,9 +1,9 @@
 """SMS-94: demo_seed가 outbox 행을 함께 stage하는지 검증.
 
 demo_seed가 grade/feedback/counseling INSERT마다 outbox 행을 짝지어 만들면,
-이미 SMS-54에서 검증된 publisher → kafka → analytics-worker 흐름에 의해
-``analytics.agg_*``가 자동으로 채워진다. 본 테스트는 그 첫 단계
-(demo_seed → outbox)만 검증하여 회귀를 방지한다.
+publisher (LISTEN/NOTIFY relay) → analytics-worker (SKIP LOCKED claim) 흐름에
+의해 ``analytics.agg_*``가 자동으로 채워진다 (ADR-003). 본 테스트는 그
+첫 단계(demo_seed → outbox)만 검증하여 회귀를 방지한다.
 """
 from __future__ import annotations
 

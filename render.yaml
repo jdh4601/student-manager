@@ -39,3 +39,44 @@ services:
         sync: false  # Set in dashboard: your Vercel frontend URL
       - key: ALLOWED_ORIGINS
         sync: false  # Set in dashboard: ["https://your-vercel-url.vercel.app"]
+
+  # ─── Outbox CDC workers (ADR-003) ─────────────────────────────────────────
+  # Background workers that drive the analytics pipeline:
+  #   outbox-publisher → SELECT FOR UPDATE SKIP LOCKED + pg_notify
+  #   analytics-worker → LISTEN + claim-by-event_id (SKIP LOCKED) + UPSERT
+  # No managed Kafka required — message bus is Postgres itself.
+  - type: worker
+    name: student-manager-outbox-publisher
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter  # Background Workers require paid tier (~$7/mo per worker)
+    dockerCommand: python -m app.workers.outbox_publisher
+    envVars:
+      - key: PYTHONPATH
+        value: /app
+      - key: DATABASE_URL
+        fromDatabase:
+          name: student-manager-db
+          property: connectionString
+      - key: LISTEN_NOTIFY_IDLE_POLL_INTERVAL
+        value: "0.5"
+
+  - type: worker
+    name: student-manager-analytics-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    dockerCommand: python -m app.workers.analytics
+    envVars:
+      - key: PYTHONPATH
+        value: /app
+      - key: DATABASE_URL
+        fromDatabase:
+          name: student-manager-db
+          property: connectionString
+      - key: LISTEN_NOTIFY_CATCHUP_INTERVAL
+        value: "60.0"
+      - key: OUTBOX_MAX_RETRIES
+        value: "3"

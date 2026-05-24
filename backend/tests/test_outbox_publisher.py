@@ -1,13 +1,13 @@
-"""SMS-52: outbox-publisher worker — drain + catch-up + retry semantics."""
+"""outbox-publisher — drain + catch-up + retry semantics (post ADR-003)."""
 from __future__ import annotations
 
 import asyncio
 import json
 import uuid
-from typing import Any
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.outbox import Outbox
 from app.services.outbox import fetch_unsent, mark_sent
@@ -15,26 +15,18 @@ from app.workers.outbox_publisher import _drain_once, run
 from tests.conftest import async_session_test
 
 
-class FakeProducer:
-    """Records outbound messages; can be told to fail N times before succeeding."""
+class FakeNotifier:
+    """Records NOTIFY calls; can be told to fail N times before succeeding."""
 
     def __init__(self, *, fail_first: int = 0):
-        self.started = False
-        self.stopped = False
-        self.sent: list[tuple[str, bytes, bytes]] = []
+        self.sent: list[tuple[str, str]] = []
         self._fail_remaining = fail_first
 
-    async def start(self) -> None:
-        self.started = True
-
-    async def stop(self) -> None:
-        self.stopped = True
-
-    async def send_and_wait(self, topic: str, value: bytes, key: bytes | None = None):
+    async def notify(self, db: AsyncSession, *, channel: str, payload: str) -> None:
         if self._fail_remaining > 0:
             self._fail_remaining -= 1
-            raise RuntimeError("simulated broker down")
-        self.sent.append((topic, value, key or b""))
+            raise RuntimeError("simulated notify failure")
+        self.sent.append((channel, payload))
 
 
 async def _stage_outbox(n: int) -> list[int]:
@@ -74,115 +66,109 @@ async def test_mark_sent_populates_sent_at():
     async with async_session_test() as session:
         rows = (await session.execute(select(Outbox))).scalars().all()
     assert all(r.sent_at is not None for r in rows)
-    # fetch_unsent should now return nothing
     async with async_session_test() as session:
         assert await fetch_unsent(session) == []
 
 
 @pytest.mark.asyncio
-async def test_drain_once_publishes_and_marks_sent():
-    await _stage_outbox(3)
-    producer = FakeProducer()
+async def test_drain_once_notifies_and_marks_sent():
+    ids = await _stage_outbox(3)
+    notifier = FakeNotifier()
     async with async_session_test() as session:
-        n = await _drain_once(session, producer, batch_size=10)
+        n = await _drain_once(session, notifier, batch_size=10)
 
     assert n == 3
-    assert len(producer.sent) == 3
-    # payload is JSON-encoded
-    topics = {topic for topic, _, _ in producer.sent}
-    assert topics == {"grade_events"}
-    payloads = [json.loads(value.decode("utf-8")) for _, value, _ in producer.sent]
-    assert [p["i"] for p in payloads] == [0, 1, 2]
+    assert len(notifier.sent) == 3
+
+    channels = {channel for channel, _ in notifier.sent}
+    assert channels == {"grade_events"}
+
+    # Envelope = {"event_id": <id>} — workers fetch the full payload from
+    # the outbox row, so only the id rides over NOTIFY.
+    sent_ids = [json.loads(payload)["event_id"] for _, payload in notifier.sent]
+    assert sent_ids == ids
 
     async with async_session_test() as session:
         assert await fetch_unsent(session) == []
-
-
-@pytest.mark.asyncio
-async def test_drain_once_envelopes_event_id_into_payload():
-    """Consumers (analytics-worker / SMS-53) dedupe on payload.event_id —
-    the publisher must inject the outbox row's event_id into each message."""
-    ids = await _stage_outbox(2)
-    producer = FakeProducer()
-    async with async_session_test() as session:
-        await _drain_once(session, producer, batch_size=10)
-
-    payloads = [json.loads(value.decode("utf-8")) for _, value, _ in producer.sent]
-    assert [p["event_id"] for p in payloads] == ids
 
 
 @pytest.mark.asyncio
 async def test_drain_once_empty_outbox_returns_zero():
-    producer = FakeProducer()
+    notifier = FakeNotifier()
     async with async_session_test() as session:
-        n = await _drain_once(session, producer)
+        n = await _drain_once(session, notifier)
     assert n == 0
-    assert producer.sent == []
+    assert notifier.sent == []
 
 
 @pytest.mark.asyncio
-async def test_drain_once_stops_on_publish_failure():
-    """If send_and_wait raises mid-batch, only the rows already sent get marked."""
+async def test_drain_once_rolls_back_on_notify_failure():
+    """If notify raises mid-batch, the whole transaction rolls back so the
+    rows stay unsent and SKIP LOCKED can release them for retry."""
     await _stage_outbox(5)
-    producer = FakeProducer(fail_first=0)
+    notifier = FakeNotifier()
 
-    # Patch to fail on the 3rd call
-    real_send = producer.send_and_wait
     call_count = 0
 
-    async def flaky_send(topic, value, key=None):
+    async def flaky_notify(db, *, channel, payload):
         nonlocal call_count
         call_count += 1
         if call_count == 3:
-            raise RuntimeError("broker hiccup")
-        await real_send(topic, value, key)
+            raise RuntimeError("notify hiccup")
+        notifier.sent.append((channel, payload))
 
-    producer.send_and_wait = flaky_send  # type: ignore[assignment]
+    notifier.notify = flaky_notify  # type: ignore[assignment]
 
-    async with async_session_test() as session:
-        n = await _drain_once(session, producer, batch_size=10)
-    assert n == 2  # rows 0 and 1 got through; failure on row 2 stopped the batch
+    with pytest.raises(RuntimeError, match="notify hiccup"):
+        async with async_session_test() as session:
+            await _drain_once(session, notifier, batch_size=10)
 
+    # Rollback semantics: no rows should be marked sent because the
+    # transaction never committed.
     async with async_session_test() as session:
         unsent = await fetch_unsent(session)
-    assert len(unsent) == 3  # rows 2, 3, 4 still unsent — will be retried
+    assert len(unsent) == 5
 
 
 @pytest.mark.asyncio
 async def test_run_loop_catches_up_after_simulated_outage():
-    """Stage rows, run the loop briefly with a producer that fails the first 3
-    sends, and verify all rows eventually get published."""
+    """Stage rows, run the loop briefly with a notifier that fails the first
+    3 attempts, and verify all rows eventually get relayed."""
     await _stage_outbox(5)
-    producer = FakeProducer(fail_first=3)
 
+    # Run a transient-failing notifier: fail the first batch entirely, then
+    # succeed on retries. Because failures roll back, the first 3 retries
+    # (each is a full batch attempt) all fail before the 4th succeeds.
+    class TransientFailNotifier:
+        def __init__(self):
+            self.attempts = 0
+            self.sent: list[tuple[str, str]] = []
+
+        async def notify(self, db, *, channel, payload):
+            self.attempts += 1
+            if self.attempts <= 3:
+                raise RuntimeError("transient")
+            self.sent.append((channel, payload))
+
+    notifier = TransientFailNotifier()
     stop = asyncio.Event()
 
     async def stopper():
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.5)
         stop.set()
 
     asyncio.create_task(stopper())
 
-    # Use a no-op session_factory wrapper that points to our test session
-    from tests.conftest import async_session_test as test_session_factory  # noqa: PLC0415
-
     await run(
-        producer=producer,
-        session_factory=test_session_factory,
+        session_factory=async_session_test,
+        notifier=notifier,
         poll_interval_idle=0.05,
         backoff_initial=0.05,
         backoff_max=0.1,
         stop_event=stop,
     )
 
-    # All 5 rows should have been published despite 3 initial failures
     async with async_session_test() as session:
         unsent = await fetch_unsent(session)
-    assert unsent == []
-    assert len(producer.sent) == 5
-    assert producer.started is True
-    assert producer.stopped is True
-
-
-def _silence_unused_imports() -> None:
-    _ = Any
+    assert unsent == [], f"publisher did not drain backlog (got {len(unsent)} unsent)"
+    assert len(notifier.sent) == 5

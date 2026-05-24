@@ -43,8 +43,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     cookie_samesite: str = "strict"  # one of: "lax", "strict", "none"
     cookie_path: str = "/"
-    # Kafka — outbox-publisher / analytics-worker
-    kafka_bootstrap_servers: str = "localhost:9092"
+    # Outbox CDC — Postgres LISTEN/NOTIFY channels (ADR-003)
+    listen_notify_catchup_interval: float = 60.0
+    listen_notify_idle_poll_interval: float = 0.5
+    outbox_max_retries: int = 3
 
     # Chat / LLM (OpenAI API; spec §10)
     openai_api_key: str | None = None

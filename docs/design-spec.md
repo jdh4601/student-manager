@@ -1,13 +1,14 @@
 # 학생 성적 및 상담 관리 시스템 — Design Spec
 
-**버전**: 2.1
-**작성일**: 2026-05-03
+**버전**: 2.2
+**작성일**: 2026-05-23
 **상태**: 확정
-**기반 문서**: PRD v2.1, ADR-001 (재작성), ADR-002 (CDC — Outbox + Kafka)
-**프로젝트 성격**: 졸업 평가용 로컬 프로토타입 (사용자 0명)
+**기반 문서**: PRD v2.1, ADR-001 (재작성), ~~ADR-002 (Outbox + Kafka)~~ → **ADR-003** (Outbox + Postgres LISTEN/NOTIFY + SKIP LOCKED)
+**프로젝트 성격**: 졸업 평가용 프로토타입 (Render + Vercel 클라우드 + 로컬 docker-compose, 사용자 0명)
 **변경 이력**:
 - v1.0 → v2.0: Critic 리뷰 반영
 - v2.0 → v2.1: §1 docker-compose 로컬 인프라, §9 Outbox+Kafka 기반 Analytics Layer, §10 단일 엔드포인트 챗봇
+- v2.1 → v2.2: ADR-003 반영 — Kafka 제거, Postgres LISTEN/NOTIFY + SKIP LOCKED로 §9 CDC 메커니즘 교체. 클라우드 surface (Vercel + Render Worker × 2) 추가.
 
 ---
 
@@ -1137,7 +1138,7 @@ GET /grades/{student_id}/summary?semester_ids=uuid1,uuid2
 
 ## 9. Analytics Layer (v2.1)
 
-> **CDC 패턴**: Outbox + Kafka. 자세한 근거·대안 비교는 ADR-002 참조.
+> **CDC 패턴**: Outbox + Postgres LISTEN/NOTIFY + `SELECT FOR UPDATE SKIP LOCKED`. 자세한 근거·대안 비교는 ADR-003 (ADR-002 supersede) 참조.
 
 ### 9.1 스키마
 
@@ -1285,50 +1286,43 @@ async def create_grade(db: AsyncSession, *, student_id: UUID, ...) -> Grade:
 
 **event_id envelope**: outbox row의 `event_id`는 publisher가 publish 직전에 payload에 주입한다 (`{**row.payload, "event_id": row.event_id}`). consumer는 이 값을 PK로 사용해 `INSERT ... ON CONFLICT (event_id) DO NOTHING`으로 idempotency를 보장. 운영 라우터는 outbox row를 만들 때만 책임지고 event_id 주입은 신경 쓰지 않는다.
 
-### 9.3 Outbox Publisher (Kafka producer)
+### 9.3 Outbox Publisher (NOTIFY relay)
 
-`public.outbox` 테이블의 미발행 row(`sent_at IS NULL`)를 polling하여 Kafka 토픽으로 발행한다.
+`public.outbox` 테이블의 미발행 row(`sent_at IS NULL`)를 `SELECT FOR UPDATE SKIP LOCKED`로 batch fetch한 뒤 row마다 `pg_notify(<topic_channel>, <envelope>)`를 emit하고 `sent_at`을 업데이트한다. **전체가 단일 transaction**이라 발행/마킹이 원자적이며, SKIP LOCKED 덕분에 publisher를 여러 인스턴스 띄워도 race-free.
 
 ```python
-# app/workers/outbox_publisher.py — pseudo
-async def main() -> None:
-    producer = AIOKafkaProducer(
-        bootstrap_servers=settings.KAFKA_BOOTSTRAP,
-        enable_idempotence=True,
-        acks="all",
-    )
-    await producer.start()
-    try:
-        while True:
-            rows = await fetch_unsent(limit=100)  # ORDER BY event_id
-            if not rows:
-                await asyncio.sleep(0.5)
-                continue
-            for row in rows:
-                await producer.send_and_wait(
-                    row.topic,
-                    value=json.dumps(row.payload).encode(),
-                    key=str(row.aggregate_id).encode(),
-                )
-                await mark_sent(row.event_id)
-    finally:
-        await producer.stop()
+# app/workers/outbox_publisher.py — pseudo (ADR-003)
+async def _drain_once(db, notifier, *, batch_size=100) -> int:
+    async with db.begin():
+        rows = await fetch_unsent_locked(db, limit=batch_size)  # FOR UPDATE SKIP LOCKED
+        if not rows:
+            return 0
+        for row in rows:
+            envelope = json.dumps({"event_id": row.event_id})  # ≤ 8KB NOTIFY limit
+            await notifier.notify(db, channel=row.topic, payload=envelope)
+            #  ↑ SELECT pg_notify(:channel, :payload)
+        await db.execute(
+            update(Outbox).where(Outbox.event_id.in_([r.event_id for r in rows]))
+            .values(sent_at=datetime.utcnow())
+        )
+    return len(rows)
 ```
 
 **부팅 시 catch-up**: 별도 로직 불필요. `WHERE sent_at IS NULL` 쿼리가 자동 catch-up 역할 수행.
+**Envelope**: NOTIFY payload는 `{"event_id": <id>}`만 담는다 (Postgres NOTIFY 8KB 한도 보호). worker는 event_id로 outbox row를 다시 SELECT해서 full payload 획득.
 
-### 9.4 Analytics Worker (Kafka consumer)
+### 9.4 Analytics Worker (LISTEN + SKIP LOCKED claim)
 
-단일 worker 프로세스가 4개 topic을 구독하고 record의 `topic` 필드로 핸들러를 dispatch한다.
+각 worker 프로세스가 4개 채널을 LISTEN하고 NOTIFY가 도착하면 outbox row를 `SELECT FOR UPDATE SKIP LOCKED + processed_at IS NULL`로 claim해서 처리한다. N개 워커가 동일 NOTIFY를 받지만 row lock 경쟁에서 정확히 1개만 잠그고 처리 — Kafka consumer group의 partition 분배 등가.
 
 ```python
-# app/workers/analytics.py — pseudo
-SUBSCRIBED_TOPICS = (
+# app/workers/analytics.py — pseudo (ADR-003)
+SUBSCRIBED_CHANNELS = (
     "grade_events", "attendance_events", "feedback_events", "counseling_events",
 )
 
 
-async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
+async def dispatch_event(payload: dict, *, repo, topic: str) -> None:
     if topic == "grade_events":         await process_event(payload, repo=repo)
     elif topic == "attendance_events":  await process_attendance_event(payload, repo=repo)
     elif topic == "feedback_events":    await process_feedback_event(payload, repo=repo)
@@ -1336,39 +1330,48 @@ async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str
     else:                               raise ValueError(f"unknown topic: {topic!r}")
 
 
-async def run(*, consumer, session_factory, ...):
-    await consumer.start()
-    try:
-        while not stop_event.is_set():
-            record = await consumer.getone()
-            try:
-                try:
-                    payload = decode_record(record.value)  # raises ValueError on bad JSON
-                except (JSONDecodeError, ValueError) as exc:
-                    raise PoisonMessageError(f"decode failed: {exc}") from exc
-                async with session_factory() as db:
-                    repo = PostgresAnalyticsRepo(db)
-                    try:
-                        await dispatch_event(payload, repo=repo, topic=record.topic)
-                    except (KeyError, ValueError) as exc:
-                        raise PoisonMessageError(f"dispatch failed: {exc}") from exc
-                    await db.commit()
-                await consumer.commit()
-            except PoisonMessageError as exc:
-                # 영구 오류: dead_letter_event에 기록, offset commit해서 같은 메시지 무한 retry 회피
-                async with session_factory() as db:
-                    await PostgresAnalyticsRepo(db).record_dead_letter(
-                        topic=record.topic, partition=record.partition,
-                        offset=record.offset, raw_value=record.value, error=str(exc),
-                    )
-                    await db.commit()
-                await consumer.commit()
-            except Exception:
-                # transient: DB 일시 오류 등. offset commit 안 함 → 다음 iteration에서 같은 메시지 재시도
-                logger.exception("transient error; will retry")
-                await asyncio.sleep(backoff)
-    finally:
-        await consumer.stop()
+async def _process_one(event_id, *, topic, session_factory, repo_builder, max_retries):
+    async with session_factory() as db, db.begin():
+        row = await claim_outbox_row(db, event_id)   # FOR UPDATE SKIP LOCKED + processed_at IS NULL
+        if row is None:
+            return  # another worker won, or row already processed
+        try:
+            payload = {**row.payload, "event_id": row.event_id}
+            await dispatch_event(payload, repo=repo_builder(db), topic=topic)
+        except (KeyError, ValueError) as exc:
+            await _dead_letter(db, row, topic, str(exc), repo_builder=repo_builder)
+            await mark_processed(db, row.event_id)
+            return
+        except Exception as exc:
+            count = await record_failure(db, row.event_id, str(exc))
+            if count >= max_retries:
+                await _dead_letter(db, row, topic, "max retries", repo_builder=repo_builder)
+                await mark_processed(db, row.event_id)
+                return
+            raise  # rollback → row stays claimable for next NOTIFY/catch-up
+        await mark_processed(db, row.event_id)
+
+
+async def run(*, listener, session_factory, repo_builder=..., max_retries=3, catchup_interval=60):
+    queue: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
+    for ch in SUBSCRIBED_CHANNELS:
+        await listener.add_listener(ch, lambda c, p, ch, payload, ch=ch:
+            queue.put_nowait((ch, json.loads(payload)["event_id"])))
+
+    # Periodic catch-up: NOTIFY 유실 시 안전망
+    async def catchup():
+        while True:
+            async with session_factory() as db, db.begin():
+                rows = await fetch_unprocessed_locked(db, limit=200)
+                for r in rows: queue.put_nowait((r.topic, r.event_id))
+            await asyncio.sleep(catchup_interval)
+
+    asyncio.create_task(catchup())
+    while True:
+        topic, event_id = await queue.get()
+        await _process_one(event_id, topic=topic,
+                           session_factory=session_factory,
+                           repo_builder=repo_builder, max_retries=max_retries)
 ```
 
 #### 핸들러 별 처리 매트릭스
@@ -1409,16 +1412,17 @@ ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
 
 #### 수평 확장
 
-`docker-compose up --scale analytics-worker=3` → consumer group이 파티션 자동 분배. group_id가 동일하면 Kafka가 partition rebalance를 처리. 단, 각 (student_id, semester_id)에 대한 agg UPSERT는 동시 실행 가능성이 있어 row-level lock에 의존 — Postgres `ON CONFLICT DO UPDATE`는 자동 lock.
+`docker-compose up --scale analytics-worker=3` → N개 워커가 동일 NOTIFY를 수신하지만 `SELECT FOR UPDATE SKIP LOCKED`로 outbox row 경쟁 → 정확히 1개 워커만 row를 잠그고 처리 (Kafka consumer group의 partition 분배 등가). agg UPSERT 동시 실행 가능성은 Postgres `ON CONFLICT DO UPDATE`의 자동 lock으로 직렬화. 같은 패턴이 Sidekiq `bulk_dequeue`, oban `Oban.Job` 등 production 큐 시스템에서 사용됨.
 
 #### Dead-Letter 정책
 
-| 에러 유형 | 처리 | offset commit |
+| 에러 유형 | 처리 | outbox.processed_at |
 |---|---|---|
-| Permanent (decode 실패, 필수 필드 누락, 알 수 없는 topic) | `analytics.dead_letter_event` INSERT | ✅ commit (poison 메시지가 consumer를 무한 차단하지 않도록) |
-| Transient (DB 다운, 일시 네트워크 오류) | log + exponential backoff | ❌ no commit → 다음 iteration에서 재시도 |
+| Permanent (필수 필드 누락, 알 수 없는 topic) | `analytics.dead_letter_event` INSERT (`outbox_event_id` 함께 저장) | ✅ mark (poison row가 queue를 무한 차단하지 않도록) |
+| Transient (DB 다운, 일시 네트워크 오류) | `outbox.retry_count` 증분 + `last_error` 기록 + rollback | ❌ no mark → 다음 NOTIFY/catch-up tick에서 재claim |
+| Transient × N회 초과 | `analytics.dead_letter_event` INSERT + `last_error` 보존 | ✅ mark |
 
-운영 측에선 `SELECT * FROM analytics.dead_letter_event ORDER BY occurred_at DESC` 로 poison 메시지를 검토 후 producer 측 수정 또는 수동 replay.
+운영 측에선 `SELECT * FROM analytics.dead_letter_event ORDER BY occurred_at DESC` 로 poison 메시지를 검토 후 producer 측 수정 또는 수동 replay (outbox row의 `processed_at`을 NULL로 되돌리면 다음 catch-up에서 재처리).
 
 ### 9.5 분석 API
 
@@ -1436,11 +1440,11 @@ ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
 
 | 항목 | 정책 | 검증 |
 |------|------|------|
-| 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (Kafka 발행 + consumer 처리는 통상 sub-second) | `test_pipeline_propagates_grade_event_within_sla` (SMS-54) |
+| 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (NOTIFY 발행 + worker 처리는 통상 sub-second; catch-up 폴링이 60s 안전망) | `test_pipeline_propagates_grade_event_within_sla` (SMS-54) |
 | 정합성 검증 | testcontainers 통합 테스트가 운영 row 수 vs `analytics.fact_*` row 수를 자동 비교 (별도 CLI 스크립트 미도입) | `backend/tests/integration/*` (Sprint 1·2, `pytest -m integration`) |
 | Idempotency (중복 메시지) | 모든 fact 테이블이 `event_id` PK + `ON CONFLICT DO NOTHING`. consumer가 no-op 감지 시 agg recompute skip → fact rowcount·agg 값 모두 불변 | `test_idempotency_e2e.py` 5개 시나리오 (SMS-81) |
 | Publisher 다운 | outbox row commit됨 → 부팅 시 `WHERE sent_at IS NULL` 자동 catch-up | `test_publisher_drains_backlog_after_late_start` (SMS-54) |
-| Consumer 다운 | Kafka offset 보관 → 재기동 시 마지막 commit offset부터 재구독, 이벤트 누락 0 | `test_consumer_resumes_after_restart_without_loss` (SMS-54) |
+| Worker 다운 | outbox.processed_at IS NULL 상태로 잔여 → 재기동 시 catch-up이 `WHERE processed_at IS NULL` 모두 SKIP LOCKED 드레인, 이벤트 누락 0 | `test_worker_resumes_after_restart_without_loss` (SMS-54) |
 | Broker 다운 | publisher가 producer.send에서 retry. 운영 트랜잭션은 정상 commit (outbox row 누적) | SMS-52 catch-up 단위 테스트 |
 | Poison message | decode 실패 / 필수 필드 누락 / 알 수 없는 topic → `analytics.dead_letter_event` 기록 + offset commit. main consumer는 차단되지 않음 | `test_malformed_payload_routes_to_dead_letter_table` (SMS-81) |
 | Transient error (DB 일시 오류 등) | offset commit 안 함 + exponential backoff. 다음 iteration에서 재시도 | run() 루프 코드 |
@@ -1599,7 +1603,7 @@ Rate Limit: 10회/분 per user (slowapi)
 | REQ-005 | 비밀번호 재설정 | ✅ |
 | US-007 AC (알림 ON/OFF) | §3.8 NotificationPreference | ✅ |
 | REQ-070 (분석 스키마 분리) | §9.1 analytics.* (Sprint 1 SMS-49) | ✅ v2.1 |
-| REQ-071 (Outbox + Kafka 이벤트 적재) | §9.2~9.4 (Sprint 1 SMS-50~53, Sprint 2 SMS-78~80 4 도메인 확장) | ✅ v2.1 |
+| REQ-071 (Outbox + LISTEN/NOTIFY 이벤트 적재) | §9.2~9.4 (Sprint 1 SMS-50~53, Sprint 2 SMS-78~80 4 도메인 확장, ADR-003 메커니즘 전환) | ✅ v2.2 |
 | REQ-072 (집계 테이블) | §9.1 agg_student_subject/overall (Sprint 2에서 attendance_present_rate + feedback_count까지 채움) | ✅ v2.1 |
 | REQ-073 (교사 대시보드) | §9.5 GET /analytics/* | 🚧 v2.1 (Sprint 3 SMS-74) |
 | REQ-074 (≤ 1분 반영) | §9.6 + Sprint 1 SMS-54 + Sprint 2 SMS-81 e2e idempotency | ✅ v2.1 |

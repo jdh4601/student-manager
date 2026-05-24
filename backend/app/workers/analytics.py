@@ -1,21 +1,23 @@
-"""Analytics worker — consumes grade_events from Kafka and projects them into
-the analytics schema (fact + agg tables).
+"""Analytics worker — consumes outbox events via Postgres LISTEN/NOTIFY and
+projects them into the analytics schema (fact + agg tables).
 
-Per Design Spec §9.5 and ADR-002:
+Per Design Spec §9.5 and ADR-003 (supersedes ADR-002):
 
-- Kafka topic: ``grade_events`` (one record per grade INSERT/UPDATE)
-- Consumer group: ``analytics-worker`` (single logical reader; partitions can
-  scale horizontally later)
-- ``enable_auto_commit=False`` — we commit only AFTER the DB transaction
-  succeeds, so a crash mid-write replays the record on restart.
+- Channels: ``grade_events`` / ``attendance_events`` / ``feedback_events`` /
+  ``counseling_events`` — one NOTIFY per outbox row, emitted by the publisher.
+- Cooperative scale-out: every running worker LISTENs to every channel, but
+  ``SELECT ... FOR UPDATE SKIP LOCKED`` on the outbox row ensures only one
+  worker claims each event. ``scale=N`` distributes work the way a Kafka
+  consumer group's partition assignment would.
+- Catch-up: on boot — and on a 60s timer to defend against missed NOTIFY
+  (connection blip, payload >8KB) — the worker drains ``WHERE processed_at
+  IS NULL`` using the same SKIP LOCKED claim.
 
 Idempotency
 -----------
-The outbox row's ``event_id`` is propagated by the publisher into the Kafka
-payload. The consumer INSERTs into ``analytics.fact_grade_event`` with that
-event_id as the primary key (``ON CONFLICT DO NOTHING``). A duplicate replay
-becomes a no-op — the row count stays at 1, and the agg recompute is skipped
-since nothing changed.
+The outbox row's ``event_id`` is the primary key for ``analytics.fact_*``
+(``INSERT ... ON CONFLICT (event_id) DO NOTHING``). Combined with the
+``processed_at`` mark, replays from boot-time catch-up are no-ops.
 """
 from __future__ import annotations
 
@@ -27,6 +29,13 @@ from typing import Any, Callable, Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
+from app.models.outbox import Outbox
+from app.services.outbox import (
+    claim_outbox_row,
+    fetch_unprocessed_locked,
+    mark_processed,
+    record_failure,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -36,19 +45,19 @@ GRADE_EVENTS_TOPIC = "grade_events"
 ATTENDANCE_EVENTS_TOPIC = "attendance_events"
 FEEDBACK_EVENTS_TOPIC = "feedback_events"
 COUNSELING_EVENTS_TOPIC = "counseling_events"
-SUBSCRIBED_TOPICS = (
+SUBSCRIBED_CHANNELS = (
     GRADE_EVENTS_TOPIC,
     ATTENDANCE_EVENTS_TOPIC,
     FEEDBACK_EVENTS_TOPIC,
     COUNSELING_EVENTS_TOPIC,
 )
-CONSUMER_GROUP_ID = "analytics-worker"
 
 
 class PoisonMessageError(Exception):
-    """A message is permanently unprocessable — malformed JSON, missing
-    required fields, or an unknown topic. The consumer routes it to the
-    dead-letter table and commits the offset so it stops blocking."""
+    """A message is permanently unprocessable — malformed payload, missing
+    required fields, or an unknown topic. The worker routes the outbox row
+    to ``analytics.dead_letter_event`` and marks ``processed_at`` so it
+    stops blocking the queue."""
 
 
 REQUIRED_PAYLOAD_FIELDS = (
@@ -89,7 +98,7 @@ REQUIRED_COUNSELING_PAYLOAD_FIELDS = (
 
 
 class AnalyticsRepository(Protocol):
-    """Operations the consumer needs against the analytics schema.
+    """Operations the worker needs against the analytics schema.
 
     Splitting the SQL behind this protocol keeps the consumer logic testable
     without a running Postgres — see tests/workers/test_analytics_consumer.py
@@ -97,25 +106,21 @@ class AnalyticsRepository(Protocol):
     """
 
     async def insert_fact_event(self, *, event_id: int, payload: dict) -> bool:
-        """Insert one row into analytics.fact_grade_event.
+        """Insert one row into ``analytics.fact_grade_event``.
 
-        Returns True if a new row was inserted, False if the event_id already
-        existed (ON CONFLICT DO NOTHING). The caller uses this to skip the
-        agg recompute on retried messages.
+        Returns ``True`` if a new row was inserted, ``False`` if the event_id
+        already existed (ON CONFLICT DO NOTHING). The caller uses this to skip
+        the agg recompute on retried messages.
         """
 
     async def insert_fact_attendance(self, *, event_id: int, payload: dict) -> bool:
-        """Insert one row into analytics.fact_attendance_event.
-
-        Same semantics as ``insert_fact_event`` but for attendance — returns
-        False on event_id conflict so the consumer can skip the recompute.
-        """
+        """Insert one row into ``analytics.fact_attendance_event`` (idempotent on event_id)."""
 
     async def insert_fact_feedback(self, *, event_id: int, payload: dict) -> bool:
-        """Insert one row into analytics.fact_feedback_event (idempotent on event_id)."""
+        """Insert one row into ``analytics.fact_feedback_event`` (idempotent on event_id)."""
 
     async def insert_fact_counseling(self, *, event_id: int, payload: dict) -> bool:
-        """Insert one row into analytics.fact_counseling_event (idempotent on event_id).
+        """Insert one row into ``analytics.fact_counseling_event`` (idempotent on event_id).
 
         Counseling has no aggregate projection — this fact row is for
         audit / future BI use only.
@@ -124,33 +129,34 @@ class AnalyticsRepository(Protocol):
     async def record_dead_letter(
         self,
         *,
+        outbox_event_id: int,
         topic: str,
-        partition: int | None,
-        offset: int | None,
         raw_value: bytes,
         error: str,
     ) -> None:
-        """Persist a poison message into analytics.dead_letter_event."""
+        """Persist a poison message into ``analytics.dead_letter_event``."""
 
     async def recompute_agg_subject(
         self, *, student_id: str, subject_id: str, semester_id: str
     ) -> None:
-        """UPSERT analytics.agg_student_subject for the (student, subject, semester) key."""
+        """UPSERT ``analytics.agg_student_subject`` for the (student, subject, semester) key."""
 
     async def recompute_agg_overall(self, *, student_id: str, semester_id: str) -> None:
-        """UPSERT analytics.agg_student_overall for the (student, semester) key."""
+        """UPSERT ``analytics.agg_student_overall`` for the (student, semester) key."""
 
 
-def decode_record(value: bytes) -> dict:
-    """Decode a Kafka record value into a payload dict.
+def _normalize_payload(row: Outbox) -> dict[str, Any]:
+    """Build the dispatch payload for one outbox row.
 
-    Anything other than a JSON object is a producer bug — raise so the consumer
-    leaves the offset uncommitted and an operator can investigate.
+    The publisher only emits ``{"event_id": <id>}`` over NOTIFY (8KB limit);
+    the full payload lives on the row itself. ``event_id`` is injected so
+    dispatch handlers can populate ``analytics.fact_*.event_id``.
     """
-    obj = json.loads(value.decode("utf-8"))
-    if not isinstance(obj, dict):
-        raise ValueError(f"expected JSON object, got {type(obj).__name__}")
-    return obj
+    if not isinstance(row.payload, dict):
+        raise ValueError(
+            f"outbox.payload must be JSON object, got {type(row.payload).__name__}"
+        )
+    return {**row.payload, "event_id": row.event_id}
 
 
 async def process_event(payload: dict, *, repo: AnalyticsRepository) -> None:
@@ -180,11 +186,7 @@ async def process_event(payload: dict, *, repo: AnalyticsRepository) -> None:
 
 
 async def process_attendance_event(payload: dict, *, repo: AnalyticsRepository) -> None:
-    """Apply one attendance_events payload to the analytics schema.
-
-    Attendance only touches agg_student_overall.attendance_present_rate —
-    there is no per-subject aggregation for attendance.
-    """
+    """Apply one attendance_events payload to the analytics schema."""
     for field_name in REQUIRED_ATTENDANCE_PAYLOAD_FIELDS:
         if field_name not in payload:
             raise KeyError(
@@ -205,12 +207,7 @@ async def process_attendance_event(payload: dict, *, repo: AnalyticsRepository) 
 
 
 async def process_feedback_event(payload: dict, *, repo: AnalyticsRepository) -> None:
-    """Apply one feedback_events payload to the analytics schema.
-
-    Feedback touches only agg_student_overall.feedback_count, which is
-    recomputed from fact_feedback_event (DISTINCT ON feedback_id, latest
-    state, count rows where op != 'DELETE').
-    """
+    """Apply one feedback_events payload to the analytics schema."""
     for field_name in REQUIRED_FEEDBACK_PAYLOAD_FIELDS:
         if field_name not in payload:
             raise KeyError(
@@ -247,7 +244,7 @@ async def process_counseling_event(payload: dict, *, repo: AnalyticsRepository) 
 
 
 async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
-    """Route a Kafka record to the right per-topic handler."""
+    """Route a payload to the right per-channel handler."""
     if topic == GRADE_EVENTS_TOPIC:
         await process_event(payload, repo=repo)
     elif topic == ATTENDANCE_EVENTS_TOPIC:
@@ -387,9 +384,8 @@ class PostgresAnalyticsRepo:
     async def record_dead_letter(
         self,
         *,
+        outbox_event_id: int,
         topic: str,
-        partition: int | None,
-        offset: int | None,
         raw_value: bytes,
         error: str,
     ) -> None:
@@ -398,16 +394,15 @@ class PostgresAnalyticsRepo:
         stmt = text(
             """
             INSERT INTO analytics.dead_letter_event
-                (topic, partition, offset_, raw_value, error, occurred_at)
-            VALUES (:topic, :partition, :offset_, :raw_value, :error, now())
+                (topic, outbox_event_id, raw_value, error, occurred_at)
+            VALUES (:topic, :outbox_event_id, :raw_value, :error, now())
             """
         )
         await self._db.execute(
             stmt,
             {
                 "topic": topic,
-                "partition": partition,
-                "offset_": offset,
+                "outbox_event_id": outbox_event_id,
                 "raw_value": raw_value,
                 "error": error,
             },
@@ -434,7 +429,6 @@ class PostgresAnalyticsRepo:
                     avg(score)         AS avg_score,
                     max(score)         AS max_score,
                     min(score)         AS min_score,
-                    -- latest_rank: rank from the most-recent event across the set
                     (SELECT grade_rank FROM latest
                        ORDER BY grade_rank IS NULL, grade_rank
                        LIMIT 1)        AS latest_rank,
@@ -469,13 +463,7 @@ class PostgresAnalyticsRepo:
         )
 
     async def recompute_agg_overall(self, *, student_id: str, semester_id: str) -> None:
-        """Recompute every agg_student_overall column from the current fact state.
-
-        We always recompute total/avg/subject_count (from fact_grade_event) AND
-        attendance_present_rate (from fact_attendance_event) in the same UPSERT,
-        regardless of which event triggered the call. This keeps a single
-        consistent UPSERT path for both grade and attendance consumers.
-        """
+        """Recompute every ``agg_student_overall`` column from the current fact state."""
         from sqlalchemy import text
 
         stmt = text(
@@ -554,111 +542,215 @@ class PostgresAnalyticsRepo:
         )
 
 
-class Consumer(Protocol):
-    """Subset of AIOKafkaConsumer we use — eases unit testing."""
+class Listener(Protocol):
+    """Subset of an asyncpg LISTEN connection we use — eases unit testing."""
 
-    async def start(self) -> None: ...
-    async def stop(self) -> None: ...
-    async def getone(self) -> Any: ...
-    async def commit(self) -> None: ...
+    async def add_listener(self, channel: str, callback: Callable[..., Any]) -> None: ...
+    async def remove_listener(self, channel: str, callback: Callable[..., Any]) -> None: ...
+    async def close(self) -> None: ...
+
+
+async def _process_one(
+    event_id: int,
+    *,
+    topic: str | None,
+    session_factory: async_sessionmaker[AsyncSession],
+    repo_builder: Callable[[AsyncSession], AnalyticsRepository],
+    max_retries: int,
+) -> None:
+    """Claim a single outbox row, dispatch it, and mark terminal state.
+
+    The whole thing runs in one DB transaction so the SKIP LOCKED claim and
+    the ``processed_at`` mark commit atomically — if processing crashes, the
+    row stays unclaimed for the next worker to retry.
+    """
+    async with session_factory() as db:
+        async with db.begin():
+            row = await claim_outbox_row(db, event_id)
+            if row is None:
+                # Either: (a) another worker already claimed it, or
+                # (b) it was already processed. Either way, nothing to do.
+                return
+
+            channel = topic or row.topic
+            try:
+                payload = _normalize_payload(row)
+            except (KeyError, ValueError) as exc:
+                await _dead_letter(
+                    db, row, channel, str(exc), repo_builder=repo_builder
+                )
+                await mark_processed(db, row.event_id)
+                return
+
+            repo = repo_builder(db)
+            try:
+                await dispatch_event(payload, repo=repo, topic=channel)
+            except (KeyError, ValueError) as exc:
+                # Permanent: the schema is wrong. Dead-letter immediately.
+                await _dead_letter(
+                    db, row, channel, f"dispatch failed: {exc}", repo_builder=repo_builder
+                )
+                await mark_processed(db, row.event_id)
+                return
+            except Exception as exc:
+                # Transient (DB blip, etc.) — bump retry, exhaust then dead-letter.
+                new_count = await record_failure(db, row.event_id, str(exc))
+                if new_count >= max_retries:
+                    await _dead_letter(
+                        db, row, channel,
+                        f"max retries ({max_retries}) exceeded: {exc}",
+                        repo_builder=repo_builder,
+                    )
+                    await mark_processed(db, row.event_id)
+                    return
+                # Re-raise so the transaction rolls back and the row stays
+                # claimable for the next iteration.
+                raise
+
+            await mark_processed(db, row.event_id)
+
+
+async def _dead_letter(
+    db: AsyncSession,
+    row: Outbox,
+    topic: str,
+    error: str,
+    *,
+    repo_builder: Callable[[AsyncSession], AnalyticsRepository],
+) -> None:
+    repo = repo_builder(db)
+    raw = json.dumps({"event_id": row.event_id, "payload": row.payload}).encode("utf-8")
+    await repo.record_dead_letter(
+        outbox_event_id=row.event_id,
+        topic=topic,
+        raw_value=raw,
+        error=error,
+    )
+
+
+def _build_asyncpg_dsn(database_url: str) -> str:
+    """Translate SQLAlchemy ``postgresql+asyncpg://...`` URL to a plain DSN."""
+    # asyncpg.connect accepts `postgresql://...` but not `+asyncpg`.
+    if database_url.startswith("postgresql+asyncpg://"):
+        return "postgresql://" + database_url[len("postgresql+asyncpg://"):]
+    return database_url
 
 
 async def run(
     *,
-    consumer: Consumer,
+    listener: Listener,
     session_factory: async_sessionmaker[AsyncSession],
     repo_builder: Callable[[AsyncSession], AnalyticsRepository] | None = None,
     stop_event: asyncio.Event | None = None,
-    backoff_initial: float = 1.0,
-    backoff_max: float = 30.0,
-    getone_timeout: float = 1.0,
+    catchup_interval: float | None = None,
+    max_retries: int | None = None,
 ) -> None:
-    """Consumer loop — fetch one record, process in a fresh DB TX, commit offset.
+    """LISTEN loop — register handlers, drain backlog, then react to NOTIFYs.
 
-    ``getone_timeout`` lets the loop wake periodically to check ``stop_event``
-    even when the broker is idle; the call is wrapped in ``wait_for`` so we
-    don't block shutdown indefinitely.
+    On every NOTIFY (or 60s catch-up tick), workers race for the outbox row
+    via SKIP LOCKED; only one wins. A startup catch-up handles whatever
+    accumulated while the worker was offline, and the periodic tick defends
+    against missed NOTIFYs (connection blip, async backpressure, payload
+    truncation).
     """
     if repo_builder is None:
         repo_builder = lambda db: PostgresAnalyticsRepo(db)  # noqa: E731
 
-    await consumer.start()
-    backoff = backoff_initial
+    catchup = catchup_interval if catchup_interval is not None else settings.listen_notify_catchup_interval
+    retries = max_retries if max_retries is not None else settings.outbox_max_retries
+
+    queue: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
+
+    def make_callback(channel: str) -> Callable[..., Any]:
+        def _cb(connection: Any, pid: int, channel_name: str, payload: str) -> None:
+            try:
+                data = json.loads(payload) if payload else {}
+                event_id = int(data.get("event_id"))
+            except (json.JSONDecodeError, TypeError, ValueError):
+                logger.warning(
+                    "ignoring malformed NOTIFY payload on channel=%s: %r",
+                    channel_name,
+                    payload,
+                )
+                return
+            queue.put_nowait((channel, event_id))
+        return _cb
+
+    callbacks: dict[str, Callable[..., Any]] = {}
+    for channel in SUBSCRIBED_CHANNELS:
+        cb = make_callback(channel)
+        callbacks[channel] = cb
+        await listener.add_listener(channel, cb)
+
+    async def catchup_loop() -> None:
+        """Periodic + boot-time drain — handles missed NOTIFYs and prior backlog."""
+        while stop_event is None or not stop_event.is_set():
+            try:
+                async with session_factory() as db:
+                    async with db.begin():
+                        rows = await fetch_unprocessed_locked(db, limit=200)
+                    # Release the lock before queueing so workers in this same
+                    # process don't double-claim — _process_one re-claims with
+                    # its own SKIP LOCKED inside a fresh transaction.
+                    for row in rows:
+                        queue.put_nowait((row.topic, row.event_id))
+                if rows:
+                    logger.info("catch-up drained %d backlog row(s)", len(rows))
+            except Exception:
+                logger.exception("catch-up iteration failed; will retry next tick")
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait() if stop_event else asyncio.Event().wait(),
+                    timeout=catchup,
+                )
+            except asyncio.TimeoutError:
+                continue
+
+    catchup_task = asyncio.create_task(catchup_loop())
+
     try:
         while stop_event is None or not stop_event.is_set():
             try:
-                record = await asyncio.wait_for(consumer.getone(), timeout=getone_timeout)
+                topic, event_id = await asyncio.wait_for(queue.get(), timeout=1.0)
             except asyncio.TimeoutError:
-                continue
-            except Exception:
-                logger.exception("consumer.getone() failed; backing off %.1fs", backoff)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, backoff_max)
                 continue
 
             try:
-                try:
-                    payload = decode_record(record.value)
-                except (json.JSONDecodeError, ValueError) as exc:
-                    raise PoisonMessageError(f"decode failed: {exc}") from exc
-                async with session_factory() as db:
-                    repo = repo_builder(db)
-                    try:
-                        await dispatch_event(payload, repo=repo, topic=record.topic)
-                    except (KeyError, ValueError) as exc:
-                        raise PoisonMessageError(f"dispatch failed: {exc}") from exc
-                    await db.commit()
-                await consumer.commit()
-                backoff = backoff_initial
-            except PoisonMessageError as exc:
-                logger.warning(
-                    "poison message at offset=%s topic=%s: %s",
-                    getattr(record, "offset", "?"),
-                    getattr(record, "topic", "?"),
-                    exc,
+                await _process_one(
+                    event_id,
+                    topic=topic,
+                    session_factory=session_factory,
+                    repo_builder=repo_builder,
+                    max_retries=retries,
                 )
-                try:
-                    async with session_factory() as db:
-                        repo = repo_builder(db)
-                        await repo.record_dead_letter(
-                            topic=getattr(record, "topic", ""),
-                            partition=getattr(record, "partition", None),
-                            offset=getattr(record, "offset", None),
-                            raw_value=record.value,
-                            error=str(exc),
-                        )
-                        await db.commit()
-                    await consumer.commit()
-                    backoff = backoff_initial
-                except Exception:
-                    logger.exception(
-                        "failed to record dead letter for offset=%s — will retry",
-                        getattr(record, "offset", "?"),
-                    )
-                    await asyncio.sleep(backoff)
-                    backoff = min(backoff * 2, backoff_max)
             except Exception:
                 logger.exception(
-                    "failed to process record offset=%s topic=%s — offset will not be committed",
-                    getattr(record, "offset", "?"),
-                    getattr(record, "topic", "?"),
+                    "transient failure processing event_id=%s — will retry on next NOTIFY/catch-up",
+                    event_id,
                 )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, backoff_max)
     finally:
-        await consumer.stop()
+        catchup_task.cancel()
+        try:
+            await catchup_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        for channel, cb in callbacks.items():
+            try:
+                await listener.remove_listener(channel, cb)
+            except Exception:
+                logger.debug("listener.remove_listener(%s) failed during shutdown", channel)
+        try:
+            await listener.close()
+        except Exception:
+            logger.debug("listener.close() failed during shutdown")
 
 
-def _build_default_consumer() -> Consumer:
-    from aiokafka import AIOKafkaConsumer  # imported here to keep test runs cheap
+async def _build_default_listener() -> Listener:  # pragma: no cover — entrypoint plumbing
+    import asyncpg
 
-    return AIOKafkaConsumer(
-        *SUBSCRIBED_TOPICS,
-        bootstrap_servers=settings.kafka_bootstrap_servers,
-        group_id=CONSUMER_GROUP_ID,
-        enable_auto_commit=False,
-        auto_offset_reset="earliest",
-    )
+    dsn = _build_asyncpg_dsn(settings.database_url)
+    conn = await asyncpg.connect(dsn)
+    return conn  # asyncpg.Connection satisfies the Listener Protocol
 
 
 async def main() -> None:  # pragma: no cover — entrypoint
@@ -668,9 +760,9 @@ async def main() -> None:  # pragma: no cover — entrypoint
     )
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    consumer = _build_default_consumer()
+    listener = await _build_default_listener()
     try:
-        await run(consumer=consumer, session_factory=session_factory)
+        await run(listener=listener, session_factory=session_factory)
     finally:
         await engine.dispose()
 

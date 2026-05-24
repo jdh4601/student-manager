@@ -109,7 +109,7 @@
 | ID | 요구사항 | 우선순위 |
 |----|---------|---------|
 | REQ-070 | 운영 데이터(`public`) ↔ 분석 데이터(`analytics`) 스키마 분리 | Must |
-| REQ-071 | 운영 → 분석 이벤트 기반 적재 (Outbox + Kafka KRaft + analytics-worker consumer) | Must |
+| REQ-071 | 운영 → 분석 이벤트 기반 적재 (Outbox + Postgres LISTEN/NOTIFY + analytics-worker, ADR-003) | Must |
 | REQ-072 | 학생별·과목별 학습 현황 집계 테이블 | Must |
 | REQ-073 | 교사 개인용 분석 대시보드 (담당 학급 한정) | Must |
 | REQ-074 | 분석 데이터 일관성: 운영 변경 후 ≤ 1분 내 반영 | Should |
@@ -182,14 +182,14 @@
 |--------|------|
 | Frontend | React 18, TypeScript, Tailwind CSS, Zustand, TanStack Query, Recharts |
 | Backend | FastAPI (Python 3.12), Pydantic v2, SQLAlchemy 2.0, Alembic |
-| Outbox Publisher | Python 3.12, aiokafka (Kafka producer) |
-| Analytics Worker | Python 3.12, aiokafka (Kafka consumer + consumer group) |
+| Outbox Publisher | Python 3.12, asyncpg (SELECT FOR UPDATE SKIP LOCKED + `pg_notify`) |
+| Analytics Worker | Python 3.12, asyncpg (LISTEN + SKIP LOCKED claim + UPSERT) |
 | Chat 엔드포인트 | FastAPI 백엔드 내부 단일 라우터 (`/api/v1/chat`). LLM SDK 직접 호출 |
-| Message Stream | Apache Kafka (KRaft 단일 노드, docker-compose). **Fallback**: Redpanda |
+| Message Stream | Postgres LISTEN/NOTIFY (외부 broker 없음 — ADR-003) |
 | Database | PostgreSQL (`public` + `analytics` + `outbox` 테이블 동일 인스턴스) |
 | Auth | JWT (python-jose + passlib bcrypt) |
 | 파일 출력 | SheetJS (Excel), jsPDF (PDF) — 클라이언트 사이드 |
-| 배포 | **로컬 docker-compose** (FastAPI · Outbox publisher · analytics-worker · Kafka · Postgres · Frontend dev) |
+| 배포 | **Vercel(Frontend) + Render(Backend Web + 2 Workers + Postgres)** for 외부 demo, 로컬 `docker-compose` for 분산 시연·E2E |
 
 ### 핵심 결정사항
 
@@ -200,9 +200,9 @@
 - **파일 생성**: 클라이언트 사이드 전용 (서버는 JSON만 제공)
 - **교사 스코핑 (MVP)**: 담임 1명 = 담당 Class 1개. 교과 교사 다중 반은 평가 후 (ClassTeacher M:M)
 - **OLAP 분리 (v2.1)**: 동일 PG 인스턴스 내 `analytics` 스키마. 외부 DW(ClickHouse/BigQuery) 미도입
-- **CDC (v2.1)**: **Outbox 패턴 + Kafka KRaft + aiokafka publisher/consumer**. 운영 트랜잭션 안에서 outbox INSERT → publisher가 Kafka로 발행 → consumer(analytics-worker)가 `analytics.*` UPSERT. 상세는 ADR-002.
-- **인프라 (v2.1)**: 로컬 docker-compose. EKS·AWS·Helm·Terraform·External Secrets Operator 미도입 (평가 rubric에 없음 + 1인·2개월 자원 제약).
-- **확장성 (v2.1)**: 컨테이너 다이어그램 + `docker-compose --scale analytics-worker=3` 라이브 시연으로 입증. Consumer group + 파티션으로 수평 확장.
+- **CDC (v2.1 + ADR-003)**: **Outbox 패턴 + Postgres LISTEN/NOTIFY + `SELECT FOR UPDATE SKIP LOCKED`**. 운영 트랜잭션 안에서 outbox INSERT → publisher가 `pg_notify`로 알림 발행 → worker가 LISTEN + SKIP LOCKED claim으로 `analytics.*` UPSERT. ADR-002 (Kafka)는 도메인 규모 부적합으로 ADR-003에 의해 supersede.
+- **인프라 (v1.2)**: **Render(Backend Web + 2 Workers + Postgres) + Vercel(Frontend)**로 외부 라이브 demo 제공. 로컬 `docker-compose`는 분산 컴포넌트 시연·E2E 통합 테스트용 동등 환경 유지. EKS·AWS·Helm·Terraform 미도입.
+- **확장성 (v1.2)**: 컨테이너 다이어그램 + `docker-compose --scale analytics-worker=3` 라이브 시연으로 입증. SKIP LOCKED 기반 cooperative worker claim으로 수평 확장 (Kafka consumer group 등가).
 - **AI 어시스턴트 (v2.1)**: 별도 서비스 분리하지 않음. FastAPI 단일 엔드포인트. PII는 학급 단위 통계로 답변 범위 제한 + 이름 단순 치환 마스킹.
 
 ---
@@ -214,7 +214,7 @@
 | NEIS 등 외부 교육행정 시스템 연동 | CSV/Excel로 대체 |
 | 모바일 앱 | 웹 반응형으로 대체 |
 | 이메일 알림 | 평가 후 |
-| 클라우드 배포 (EKS/Vercel/Render 등) | 로컬 평가 환경 한정. rubric 가점 항목 아님 |
+| 쿠버네티스 / EKS 도입 | rubric 가점 항목 아님. Render Background Worker로 동등 분산 표현 충족 |
 | 100개 이상 학교 대규모 확장 | 평가 후 |
 | AI 기반 성적 분석·추천 (벡터 검색·RAG 정식 도입) | 평가 후 |
 | 학교 간 데이터 공유 | 학교 단위 완전 격리 |
@@ -231,9 +231,9 @@
 | RISK-003 | 성적 등급 계산 기준 오류 | 중간 | `calculate_grade()` 서비스 레이어 분리, 9등급 cutoff 표 명시 |
 | RISK-005 | Outbox publisher 다운 → 이벤트 미발행 | 중간 | outbox row는 commit 됨. publisher 부팅 시 `WHERE sent_at IS NULL` catch-up 쿼리로 자동 복구 |
 | RISK-007 | LLM 호출 시 학생 PII 유출 | 매우 높음 | 챗봇 답변 범위를 학급 단위 통계로 제한 (k≥5). 컨텍스트의 이름·학번은 단순 치환 마스킹 (`학생A`, `seq_001`) |
-| RISK-009 | Kafka 미경험 학습 부담 (W3 PoC 위험) | 중간 | W3 금요일 PoC fail 시 **Redpanda fallback** (Kafka API 호환, publisher/consumer 코드 변경 0) |
+| RISK-009 | LISTEN connection 끊김 → NOTIFY 유실 | 낮음 | worker 60s catch-up 폴링(`WHERE processed_at IS NULL`)이 잔여분 자동 처리. 운영 트랜잭션은 영향 없음 (outbox commit 독립) |
 | RISK-010 | 라이브 데모 환경 시드/포트/볼륨 누락 | 중간 | W9 리허설 + `scripts/demo_seed.py` + `docker-compose.demo.yml` 정비 |
-| RISK-011 | 발표 시 평가자가 LISTEN/NOTIFY와 Kafka 정의 혼동 | 낮음 | 발표 슬라이드 1장에 "Outbox + Kafka KRaft" 다이어그램 명시. "Apache Kafka 호환 메시지 스트림" 표현 통일 |
+| RISK-011 | 발표 시 평가자가 "LISTEN/NOTIFY는 message stream인가" 의문 | 낮음 | 발표 슬라이드에 "Postgres NOTIFY = 동일 인스턴스 pub/sub stream" 표기 + Sidekiq/oban 등 production 사례 인용. rubric "예: Kafka"는 한 가지 예시일 뿐 |
 
 ---
 
@@ -253,14 +253,15 @@
 - `analytics.agg_student_overall` — 학생 단위 종합 지표 (학기별)
 - `analytics.dead_letter_event` — 컨슈머가 처리 불가능한 poison message 격리 (운영 디버깅)
 
-### 10.3 CDC 파이프라인 (Outbox + Kafka)
+### 10.3 CDC 파이프라인 (Outbox + Postgres LISTEN/NOTIFY)
 - 운영 라우터 트랜잭션 안에서 `public.outbox` row INSERT (도메인 변경과 같은 트랜잭션)
-- `outbox-publisher` 프로세스가 미발행 row(`sent_at IS NULL`)를 polling → Kafka 토픽(`grade_events` 등) 발행 → `sent_at` 업데이트
-- `analytics-worker`(Kafka consumer, consumer group)가 토픽 구독 → `analytics.*` 테이블 UPSERT (idempotent)
-- 메시지 브로커: Kafka KRaft 단일 노드 (docker-compose). Fallback: Redpanda
-- Publisher 부팅 시 `WHERE sent_at IS NULL` 쿼리로 catch-up
-- 정합성 검증: testcontainers 기반 통합 테스트 (`backend/tests/integration/*`, `pytest -m integration`) — publisher → consumer → `analytics.fact_*` row 수가 운영 변경과 일치하는지 자동 검증. 별도 CLI 스크립트는 미도입
-- 자세한 패턴 비교/근거: ADR-002
+- `outbox-publisher` 프로세스가 미발행 row(`sent_at IS NULL`)를 `SELECT FOR UPDATE SKIP LOCKED`로 batch fetch → `SELECT pg_notify(<topic_channel>, '{"event_id":...}')` → `sent_at` 업데이트 (모두 단일 트랜잭션)
+- `analytics-worker × N`가 4 channel(`grade_events`/`attendance_events`/`feedback_events`/`counseling_events`) LISTEN. 알림 받으면 해당 event_id의 outbox row를 `SELECT FOR UPDATE SKIP LOCKED + processed_at IS NULL`로 claim → 정확히 1개 워커만 처리 → `analytics.*` UPSERT (idempotent on event_id) → `processed_at = now()`
+- 메시지 브로커: **Postgres 자체** (외부 broker 없음)
+- Publisher 부팅 시 `WHERE sent_at IS NULL` 쿼리로 catch-up. Worker 부팅 시 + 60초 주기로 `WHERE processed_at IS NULL` 폴링하여 NOTIFY 유실 보완
+- Dead-letter: worker가 N회 retry 후 `analytics.dead_letter_event`로 격리 + `processed_at` 마킹 (queue 차단 방지)
+- 정합성 검증: testcontainers Postgres 기반 통합 테스트 — publisher → worker → `analytics.fact_*` row 수 일치, scale=3에서도 중복 처리 없음
+- 자세한 패턴 비교/근거: ADR-003 (ADR-002 supersede)
 
 ### 10.4 분석 API
 - `GET /api/v1/analytics/students/{id}/overview` — 학생 학습 요약
