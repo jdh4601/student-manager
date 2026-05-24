@@ -1,10 +1,12 @@
 # ADR-002: CDC 패턴 — Outbox + Kafka KRaft
 
-**상태**: Accepted
+**상태**: **Superseded by [ADR-003](./003-cdc-replace-kafka-with-listen-notify.md) (2026-05-23)**
 **작성일**: 2026-05-03
 **작성자**: DongHyun Jung
 **선행 결정**: ADR-001 (OLAP 분석 파이프라인 + 인프라 방향)
 **선행 노트**: `history/2026-05-03-v2.1-architecture-grill.md` (Q4)
+
+> **2026-05-23 supersede 요약**: Kafka를 제거하고 Postgres LISTEN/NOTIFY + `SELECT FOR UPDATE SKIP LOCKED`로 전환. Outbox 패턴·publisher·worker 분리 구조·멱등성·catch-up 의미론은 그대로 유지. rubric 가점 항목("데이터 변경 이벤트 기반 분석 갱신 구조")은 LISTEN/NOTIFY로도 충족. 결정 근거: 도메인 규모(학교당 500명, 30k row)에서 Kafka over-engineered + 클라우드 배포 시 외부 managed Kafka 부담 회피. 본 문서는 의사결정 히스토리 보존을 위해 본문 유지.
 
 ---
 

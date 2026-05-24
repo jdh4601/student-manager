@@ -16,36 +16,6 @@ services:
       timeout: 3s
       retries: 20
 
-  kafka:
-    image: confluentinc/cp-kafka:7.6.1
-    container_name: sm-kafka
-    environment:
-      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_NODE_ID: 1
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:29092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_NUM_PARTITIONS: 3
-    ports:
-      - "9092:9092"
-      - "29092:29092"
-    volumes:
-      - kafkadata:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
   backend:
     build:
       context: ./backend
@@ -64,11 +34,11 @@ services:
       AUTH_LINK_DELIVERY: stub
       RUN_SEED: 1
       ALLOWED_ORIGINS: '["http://localhost:5173"]'
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
     depends_on:
       db:
-        condition: service_healthy
-      kafka:
         condition: service_healthy
     ports:
       - "${BACKEND_PORT:-18000}:8000"
@@ -92,11 +62,8 @@ services:
     environment:
       PYTHONPATH: /app
       DATABASE_URL: postgresql+asyncpg://sm:smpass@db:5432/student_manager
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
-        condition: service_healthy
-      kafka:
         condition: service_healthy
     command: ["python", "-m", "app.workers.outbox_publisher"]
     restart: unless-stopped
@@ -107,15 +74,12 @@ services:
     build:
       context: ./backend
     # container_name 의도적으로 미지정 — `docker compose up --scale analytics-worker=N`
-    # 으로 다중 인스턴스를 띄울 수 있어야 한다 (Kafka consumer group 분산 시연 SMS-67).
+    # 으로 다중 인스턴스를 띄워 SKIP LOCKED 기반 작업 분배를 시연한다 (ADR-003).
     environment:
       PYTHONPATH: /app
       DATABASE_URL: postgresql+asyncpg://sm:smpass@db:5432/student_manager
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     depends_on:
       db:
-        condition: service_healthy
-      kafka:
         condition: service_healthy
     command: ["python", "-m", "app.workers.analytics"]
     restart: unless-stopped
@@ -139,4 +103,3 @@ services:
 
 volumes:
   pgdata: {}
-  kafkadata: {}

@@ -1,119 +1,147 @@
-"""Outbox publisher — polls public.outbox and forwards rows to Kafka.
+"""Outbox publisher — polls public.outbox and emits a Postgres NOTIFY per row.
 
-Per Design Spec §9.4 and ADR-002. Runs as its own container; on boot, the
-`WHERE sent_at IS NULL` query naturally catches up any rows the previous
-instance failed to publish (no separate replay logic needed).
+Per ADR-003 (supersedes ADR-002). The previous implementation produced records
+to Kafka; this one emits ``SELECT pg_notify(<topic>, <payload>)`` and updates
+``sent_at`` in the same transaction. ``SELECT FOR UPDATE SKIP LOCKED`` keeps
+multiple publisher instances safe (single instance is the default deployment,
+but the lock is cheap insurance).
+
+The boot-time ``WHERE sent_at IS NULL`` query naturally catches up rows the
+previous instance failed to publish — no separate replay logic needed.
+
+The ``Notifier`` protocol exists so unit tests can inject a stub: ``pg_notify``
+is Postgres-only, but the rest of the publisher (fetch + mark) works on SQLite
+under the unit-test conftest.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+from datetime import datetime
 from typing import Protocol
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import settings
-from app.services.outbox import fetch_unsent, mark_sent
+from app.models.outbox import Outbox
+from app.services.outbox import emit_notify, fetch_unsent_locked
 
 
 logger = logging.getLogger(__name__)
 
 
-class Producer(Protocol):
-    """Subset of AIOKafkaProducer we use — eases unit testing."""
+class Notifier(Protocol):
+    """Indirection over ``SELECT pg_notify(...)`` for testability."""
 
-    async def start(self) -> None: ...
-    async def stop(self) -> None: ...
-    async def send_and_wait(self, topic: str, value: bytes, key: bytes | None = None): ...
+    async def notify(self, db: AsyncSession, *, channel: str, payload: str) -> None: ...
 
 
-async def _drain_once(db: AsyncSession, producer: Producer, *, batch_size: int = 100) -> int:
-    """Publish one batch of unsent rows. Returns the number of rows marked sent.
+class PgNotifyNotifier:
+    """Default implementation — emits ``SELECT pg_notify(:channel, :payload)``."""
 
-    Each row is published individually before being marked sent. If `send_and_wait`
-    raises (broker down, etc.), the row is left as-is and will be retried on the
-    next loop iteration — no rows are silently dropped.
+    async def notify(self, db: AsyncSession, *, channel: str, payload: str) -> None:
+        await emit_notify(db, channel=channel, payload=payload)
+
+
+async def _drain_once(
+    db: AsyncSession,
+    notifier: Notifier,
+    *,
+    batch_size: int = 100,
+) -> int:
+    """Relay one batch of unsent outbox rows — returns rows relayed.
+
+    Holds a single transaction across the fetch / notify / mark-sent so:
+      1. SKIP LOCKED guarantees no other publisher touches the same rows
+      2. If notify or mark_sent raises, the whole batch rolls back and the
+         rows re-appear unsent on the next iteration
     """
-    rows = await fetch_unsent(db, limit=batch_size)
-    if not rows:
-        return 0
+    async with db.begin():
+        rows = await fetch_unsent_locked(db, limit=batch_size)
+        if not rows:
+            return 0
 
-    published_ids: list[int] = []
-    for row in rows:
-        try:
-            # Inject the outbox event_id so downstream consumers can dedupe
-            # on retries (see analytics-worker / SMS-53).
-            envelope = {**row.payload, "event_id": row.event_id}
-            await producer.send_and_wait(
-                row.topic,
-                value=json.dumps(envelope, ensure_ascii=False).encode("utf-8"),
-                key=str(row.aggregate_id).encode("utf-8"),
+        relayed_ids: list[int] = []
+        for row in rows:
+            # Tiny envelope: only the outbox event_id travels through NOTIFY
+            # (8KB payload limit). Workers fetch the full payload from the
+            # outbox row by id, so large grade payloads / counseling notes
+            # ride safely.
+            envelope = json.dumps({"event_id": row.event_id})
+            try:
+                await notifier.notify(db, channel=row.topic, payload=envelope)
+            except Exception as exc:
+                logger.warning(
+                    "pg_notify failed for event_id=%s topic=%s: %s",
+                    row.event_id,
+                    row.topic,
+                    exc,
+                )
+                # Abort the batch — transaction rollback releases SKIP LOCKED
+                # so a retry from a fresh iteration can pick these up again.
+                raise
+
+            relayed_ids.append(row.event_id)
+
+        if relayed_ids:
+            await db.execute(
+                update(Outbox)
+                .where(Outbox.event_id.in_(relayed_ids))
+                .values(sent_at=datetime.utcnow())
             )
-        except Exception as exc:  # broker error / network / serialization
-            logger.warning("publish failed for event_id=%s: %s", row.event_id, exc)
-            break  # stop the batch — let the next iteration retry from this row
-        published_ids.append(row.event_id)
 
-    if published_ids:
-        await mark_sent(db, published_ids)
-    return len(published_ids)
+    return len(relayed_ids)
 
 
 async def run(
     *,
-    producer: Producer,
     session_factory: async_sessionmaker[AsyncSession],
-    poll_interval_idle: float = 0.5,
+    notifier: Notifier | None = None,
+    poll_interval_idle: float | None = None,
     backoff_initial: float = 1.0,
     backoff_max: float = 30.0,
     stop_event: asyncio.Event | None = None,
 ) -> None:
-    """Run the publisher loop until stop_event is set.
+    """Run the publisher loop until ``stop_event`` is set.
 
-    Empty-poll waits `poll_interval_idle` (default 500ms) so the worker stays
-    cheap when the outbox is drained. On consecutive errors, falls back to
-    exponential backoff capped at `backoff_max` to avoid hammering a sick broker.
+    Empty-poll waits ``poll_interval_idle`` (default from settings: 500ms) so
+    the worker stays cheap when the outbox is drained. On consecutive errors,
+    falls back to exponential backoff capped at ``backoff_max`` so a sick
+    database doesn't get hammered.
     """
-    await producer.start()
-    backoff = backoff_initial
-    try:
-        while stop_event is None or not stop_event.is_set():
-            try:
-                async with session_factory() as db:
-                    n = await _drain_once(db, producer)
-            except Exception:
-                logger.exception("publisher iteration crashed; backing off %.1fs", backoff)
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, backoff_max)
-                continue
-
-            if n == 0:
-                backoff = backoff_initial
-                await asyncio.sleep(poll_interval_idle)
-            else:
-                backoff = backoff_initial  # progress made — reset
-    finally:
-        await producer.stop()
-
-
-def _build_default_producer() -> Producer:
-    from aiokafka import AIOKafkaProducer  # imported here to keep test runs cheap
-
-    return AIOKafkaProducer(
-        bootstrap_servers=settings.kafka_bootstrap_servers,
-        enable_idempotence=True,
-        acks="all",
+    if notifier is None:
+        notifier = PgNotifyNotifier()
+    idle_wait = (
+        poll_interval_idle
+        if poll_interval_idle is not None
+        else settings.listen_notify_idle_poll_interval
     )
+    backoff = backoff_initial
+    while stop_event is None or not stop_event.is_set():
+        try:
+            async with session_factory() as db:
+                n = await _drain_once(db, notifier)
+        except Exception:
+            logger.exception("publisher iteration crashed; backing off %.1fs", backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, backoff_max)
+            continue
+
+        if n == 0:
+            backoff = backoff_initial
+            await asyncio.sleep(idle_wait)
+        else:
+            backoff = backoff_initial  # progress made — reset
 
 
 async def main() -> None:  # pragma: no cover — entrypoint
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    producer = _build_default_producer()
     try:
-        await run(producer=producer, session_factory=session_factory)
+        await run(session_factory=session_factory)
     finally:
         await engine.dispose()
 

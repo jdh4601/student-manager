@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { useChatStore } from '../../stores/chatStore';
 
@@ -7,6 +7,36 @@ const SUGGESTED_QUESTIONS = [
   '최근에 점수가 가장 많이 떨어진 과목은?',
   '이번 학기 우리 반 성적 분포 알려줘',
 ];
+
+const LOADING_PHRASES = [
+  '📄 성적표를 넘겨보는 중...',
+  '📋 출석부와 대조하는 중...',
+  '🙋‍♂️ 학생과 상담하는 중...',
+  '📊 데이터를 그려보는 중...',
+];
+
+const LOADING_PHRASE_INTERVAL_MS = 2200;
+const TYPE_SPEED_MS = 70;
+
+// Intl.Segmenter는 🙋‍♂️ 같은 ZWJ 이모지 조합을 한 글자(grapheme)로 묶어준다.
+// code point 단위로 자르면 타이핑 중간에 깨진 글리프가 보인다.
+// 현재 tsconfig lib에 Segmenter 타입이 없어 함수 안에서 국소적으로 선언한다.
+type GraphemeSegmenter = {
+  segment(input: string): Iterable<{ segment: string }>;
+};
+function toGraphemes(text: string): string[] {
+  const intl = Intl as typeof Intl & {
+    Segmenter?: new (
+      locale?: string,
+      options?: { granularity?: 'grapheme' }
+    ) => GraphemeSegmenter;
+  };
+  if (intl.Segmenter) {
+    const segmenter = new intl.Segmenter('ko', { granularity: 'grapheme' });
+    return Array.from(segmenter.segment(text), (s) => s.segment);
+  }
+  return Array.from(text);
+}
 
 interface ChatWidgetProps {
   autoFocus?: boolean;
@@ -18,12 +48,37 @@ export default function ChatWidget({ autoFocus = false }: ChatWidgetProps) {
   const send = useChatStore((s) => s.send);
 
   const [input, setInput] = useState('');
+  const [loadingPhraseIndex, setLoadingPhraseIndex] = useState(0);
+  const [typedCount, setTypedCount] = useState(0);
   const listEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    setLoadingPhraseIndex(0);
+    const id = setInterval(() => {
+      setLoadingPhraseIndex((i) => (i + 1) % LOADING_PHRASES.length);
+    }, LOADING_PHRASE_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [isLoading]);
+
+  const loadingGraphemes = useMemo(
+    () => toGraphemes(LOADING_PHRASES[loadingPhraseIndex]),
+    [loadingPhraseIndex]
+  );
+
+  useEffect(() => {
+    if (!isLoading) return;
+    setTypedCount(0);
+    const id = setInterval(() => {
+      setTypedCount((n) => Math.min(n + 1, loadingGraphemes.length));
+    }, TYPE_SPEED_MS);
+    return () => clearInterval(id);
+  }, [isLoading, loadingGraphemes]);
 
   useEffect(() => {
     if (autoFocus) {
@@ -74,7 +129,8 @@ export default function ChatWidget({ autoFocus = false }: ChatWidgetProps) {
         {isLoading && (
           <div className="flex justify-start">
             <div className="bg-gray-100 text-gray-500 text-sm px-3 py-2 rounded-lg">
-              생각 중...
+              {loadingGraphemes.slice(0, typedCount).join('')}
+              <span className="animate-pulse">▍</span>
             </div>
           </div>
         )}

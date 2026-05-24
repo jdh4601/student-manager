@@ -66,7 +66,7 @@
 ## 사후 정리
 
 - [ ] `make demo-scale-down`
-- [ ] `docker volume rm student-manager_pgdata student-manager_kafkadata` (선택)
+- [ ] `docker volume rm student-manager_pgdata` (선택)
 - [ ] `docs/notes/demo-rehearsal-result-YYYY-MM-DD.md` 생성해 실측 결과 기록
 
 ## 리허설 결과 로그

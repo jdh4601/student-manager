@@ -1,12 +1,13 @@
-"""Session-scoped Docker fixtures for end-to-end pipeline tests (SMS-54).
+"""Session-scoped Docker fixtures for end-to-end pipeline tests.
 
-Spins up a real Kafka (KRaft) + Postgres via testcontainers, runs alembic
-upgrade head against the Postgres container so the operational + analytics
-schemas are both present.
+Per ADR-003 the CDC pipeline now runs entirely on Postgres (outbox table +
+LISTEN/NOTIFY + SKIP LOCKED), so the integration suite only needs a single
+PostgresContainer — no Kafka. ``alembic upgrade head`` runs once per session
+so the operational + analytics schemas are both present.
 
-Cost: ~25-40s startup (image pull on first run). Tests are marked
-`@pytest.mark.integration` so they're excluded from `pytest` by default —
-use `pytest -m integration` (or `npm run qa:e2e`) to run them.
+Cost: ~15-20s startup (postgres image only). Tests are marked
+``@pytest.mark.integration`` so they're excluded from ``pytest`` by default —
+use ``pytest -m integration`` (or ``npm run qa:e2e``) to run them.
 """
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from testcontainers.kafka import KafkaContainer
 from testcontainers.postgres import PostgresContainer
 
 # Allow the suite to be collected even if Docker is absent — the actual
@@ -38,6 +38,15 @@ def _async_pg_url(sync_url: str) -> str:
     return sync_url
 
 
+def _raw_pg_dsn(sync_url: str) -> str:
+    """asyncpg.connect accepts ``postgresql://...`` but not the ``+asyncpg`` tag."""
+    if sync_url.startswith("postgresql+psycopg2://"):
+        return sync_url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    if sync_url.startswith("postgresql+asyncpg://"):
+        return sync_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return sync_url
+
+
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
     with PostgresContainer("postgres:15-alpine") as pg:
@@ -45,24 +54,14 @@ def postgres_container() -> Iterator[PostgresContainer]:
 
 
 @pytest.fixture(scope="session")
-def kafka_container() -> Iterator[KafkaContainer]:
-    # KRaft mode mirrors the production docker-compose topology.
-    container = KafkaContainer("confluentinc/cp-kafka:7.6.1").with_kraft()
-    container.start()
-    try:
-        yield container
-    finally:
-        container.stop()
-
-
-@pytest.fixture(scope="session")
-def kafka_bootstrap(kafka_container: KafkaContainer) -> str:
-    return kafka_container.get_bootstrap_server()
-
-
-@pytest.fixture(scope="session")
 def pg_async_url(postgres_container: PostgresContainer) -> str:
     return _async_pg_url(postgres_container.get_connection_url())
+
+
+@pytest.fixture(scope="session")
+def pg_raw_dsn(postgres_container: PostgresContainer) -> str:
+    """Raw asyncpg DSN — used by LISTEN connections that bypass SQLAlchemy."""
+    return _raw_pg_dsn(postgres_container.get_connection_url())
 
 
 @pytest.fixture(scope="session")
@@ -76,7 +75,7 @@ def pg_sync_url(postgres_container: PostgresContainer) -> str:
 
 @pytest.fixture(scope="session", autouse=False)
 def _migrate_schema(pg_sync_url: str) -> None:
-    """Run `alembic upgrade head` once per session against the Postgres container."""
+    """Run ``alembic upgrade head`` once per session against the Postgres container."""
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", pg_sync_url)
     command.upgrade(cfg, "head")
@@ -100,11 +99,9 @@ async def session_factory(db_engine) -> async_sessionmaker[AsyncSession]:
 async def clean_pipeline_tables(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Truncate outbox + analytics tables between tests.
 
-    Note: we deliberately do NOT ``RESTART IDENTITY`` because event_ids leak
-    onto the Kafka topic (which persists across tests within the session).
-    Resetting the sequence would let test N reuse event_ids that test N-1
-    already published, and the consumer's ``ON CONFLICT (event_id) DO NOTHING``
-    dedup would silently drop test N's new events.
+    ``RESTART IDENTITY`` is deliberately skipped: event_ids feed the
+    ``analytics.fact_*.event_id`` PK, and we want tests to behave like prod
+    where the sequence advances monotonically.
     """
     from sqlalchemy import text
 
