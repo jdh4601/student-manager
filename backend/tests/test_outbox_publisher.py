@@ -99,6 +99,19 @@ async def test_drain_once_publishes_and_marks_sent():
 
 
 @pytest.mark.asyncio
+async def test_drain_once_envelopes_event_id_into_payload():
+    """Consumers (analytics-worker / SMS-53) dedupe on payload.event_id —
+    the publisher must inject the outbox row's event_id into each message."""
+    ids = await _stage_outbox(2)
+    producer = FakeProducer()
+    async with async_session_test() as session:
+        await _drain_once(session, producer, batch_size=10)
+
+    payloads = [json.loads(value.decode("utf-8")) for _, value, _ in producer.sent]
+    assert [p["event_id"] for p in payloads] == ids
+
+
+@pytest.mark.asyncio
 async def test_drain_once_empty_outbox_returns_zero():
     producer = FakeProducer()
     async with async_session_test() as session:

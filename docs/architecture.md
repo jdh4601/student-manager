@@ -39,7 +39,7 @@
                               │
                               ▼
                      [LLM Provider 외부]
-                     (OpenAI 또는 Anthropic, 단일 선택)
+                     (OpenAI 호환 endpoint, 단일)
 ```
 
 > SMTP·Vercel Edge 등 외부 서비스는 평가용 로컬 환경에서 stub 또는 미연결 상태.
@@ -96,10 +96,13 @@
 │  └────────┬─────────┘                                                 │
 │           │ consume                                                   │
 │           ▼                                                           │
-│  ┌──────────────────────────┐                                         │
-│  │ analytics-worker         │  scale=N (consumer group)               │
-│  │ (aiokafka consumer)      │                                         │
-│  └──────────────────────────┘                                         │
+│  ┌──────────────────────────────────────────┐                         │
+│  │ analytics-worker                         │  scale=N (consumer group)│
+│  │ (aiokafka consumer + topic dispatch)     │                         │
+│  │  ├─ fact_*_event INSERT ON CONFLICT       (idempotent on event_id) │
+│  │  ├─ agg_student_* UPSERT                                           │
+│  │  └─ dead_letter_event ← poison messages   (offset committed)       │
+│  └──────────────────────────────────────────┘                         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -195,8 +198,9 @@ Teacher                fastapi-api : routers/chat.py     analytics 스키마    
 | fastapi-api | Postgres `public.outbox` | SQL INSERT (같은 TX) | JSON payload | latency 영향 ≤ 5ms |
 | outbox-publisher | Postgres | SQL (poll + UPDATE) | event row | poll 주기 0.5s |
 | outbox-publisher | Kafka | producer.send_and_wait | bytes (JSON) | 발행까지 ≤ 1s (정상) |
-| Kafka | analytics-worker | consumer poll | bytes (JSON) | sub-second |
-| analytics-worker | Postgres `analytics` | SQL UPSERT | 집계 row | best-effort, end-to-end ≤ 1분 |
+| Kafka | analytics-worker | consumer poll (4 topics: grade/attendance/feedback/counseling) | bytes (JSON) | sub-second |
+| analytics-worker | Postgres `analytics` | SQL INSERT ON CONFLICT + UPSERT | fact + agg row | best-effort, end-to-end ≤ 1분 |
+| analytics-worker | Postgres `analytics.dead_letter_event` | SQL INSERT (poison message) | raw bytes + error | only on permanent failure |
 | Browser | fastapi-api `/chat` | HTTP REST | { thread_id, message } | p95 ≤ 3s |
 | fastapi-api | LLM Provider | HTTPS | masked context + prompt | timeout 10s |
 
@@ -304,7 +308,8 @@ Teacher                fastapi-api : routers/chat.py     analytics 스키마    
 git clone ...
 make up                  # docker-compose up -d --build
 make seed                # scripts/demo_seed.py 실행
-make test                # ruff + pytest + tsc + playwright
+make qa                  # ruff + pytest + tsc (Makefile 기준)
+make e2e                 # playwright
 make demo-scale          # docker-compose up --scale analytics-worker=3
 ```
 
@@ -321,14 +326,12 @@ make demo-scale          # docker-compose up --scale analytics-worker=3
 
 ### 9.1 분석 스키마 + Outbox 도입 (v2.1)
 
-1. Alembic revision 1: `analytics` 스키마 + 테이블 생성
-2. Alembic revision 2: `public.outbox` 테이블 + 인덱스 생성
+1. Alembic revision 1: `analytics` 스키마 + 테이블 생성 (`0004_analytics_schema`)
+2. Alembic revision 2: `public.outbox` 테이블 + 인덱스 생성 (`0005_outbox_table`)
 3. 운영 라우터에 outbox INSERT 코드 추가 (도메인 변경과 같은 트랜잭션)
-4. 백필 스크립트 (`scripts/backfill_analytics.py`):
-   - 운영 테이블 전체 스캔 → `public.outbox`에 INSERT (publisher가 정상 흐름으로 catch-up)
-   - 또는 `analytics.fact_*`에 직접 INSERT + `analytics.agg_*` UPSERT (대량 백필 시)
+4. **백필 스크립트는 미구현 (평가 후 트랙)**. 평가용 시드는 `scripts/demo_seed.py`가 운영 INSERT와 함께 `public.outbox` row를 stage하므로 publisher/consumer가 정상 흐름으로 채운다. 실운영 도입 시 전체 스캔 → outbox 발행 또는 `analytics.fact_*` 직접 INSERT 스크립트가 필요
 5. publisher + analytics-worker 부팅 → catch-up 진행 확인
-6. 정합성 검증 (`scripts/check_consistency.py`): 운영 row count vs `analytics.fact_*` count
+6. 정합성 검증: testcontainers 기반 통합 테스트 (`backend/tests/integration/*`, `pytest -m integration`)가 운영 row 수 vs `analytics.fact_*` row 수를 자동 비교. 별도 `check_consistency.py` 미도입
 
 ### 9.2 기존 데이터에 영향 없음
 

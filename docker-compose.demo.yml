@@ -1,0 +1,32 @@
+# 발표 데모용 compose override. 사용:
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --scale analytics-worker=3
+#
+# - backend가 ready 되면 demo_seed.py를 자동 실행
+# - analytics-worker는 호출 시 --scale N 으로 다중 인스턴스 기동
+#
+# 정리: docker compose -f docker-compose.yml -f docker-compose.demo.yml down -v
+services:
+  backend:
+    environment:
+      RUN_SEED: 1
+      # 일반 seed.py가 먼저 돌고, entrypoint 끝나면 demo_seed.py가 추가 시드.
+      RUN_DEMO_SEED: 1
+    volumes:
+      - ./scripts:/scripts:ro
+
+  demo-seed:
+    build:
+      context: ./backend
+    environment:
+      PYTHONPATH: /app
+      DATABASE_URL: postgresql+asyncpg://sm:smpass@db:5432/student_manager
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+      - ./scripts:/scripts:ro
+    command:
+      - python
+      - /scripts/demo_seed.py
+    restart: "no"

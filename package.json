@@ -9,6 +9,7 @@
     "typecheck": "npm --prefix frontend run typecheck",
     "qa:backend": "cd backend && .venv312/bin/ruff check app tests && .venv312/bin/pytest -q",
     "qa:frontend": "npm --prefix frontend run typecheck",
+    "qa:e2e": "cd backend && .venv312/bin/pytest -m integration -q",
     "qa": "npm run qa:backend && npm run qa:frontend"
   },
   "dependencies": {

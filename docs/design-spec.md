@@ -28,83 +28,20 @@
 
 ## 1. System Overview
 
-### 아키텍처 구성 (v2.1)
+> **다이어그램·기술 스택은 다른 문서로 위임**
+> - 컨테이너 다이어그램 + 데이터 흐름: `architecture.md` §3 (C4 Level 2), §4 (모듈 흐름)
+> - 기술 스택 표: `prd.md` §7
+> - 멀티테넌트 격리·인증 토큰 전략·30초 폴링·9등급 계산·교사 스코핑·OLAP 분리·CDC 파이프라인·컨테이너 구성·챗봇 범위: `prd.md` §7 "핵심 결정사항"
 
-```
-                  [Browser]
-                      │  HTTPS / REST
-                      ▼
-   ┌─────────────────────────────────────────────────────┐
-   │  docker-compose (로컬)                              │
-   │                                                     │
-   │  ┌─────────────────┐                                │
-   │  │ frontend (Vite) │                                │
-   │  │ React 18 + TS   │                                │
-   │  └────────┬────────┘                                │
-   │           │ /api/v1                                 │
-   │           ▼                                         │
-   │  ┌─────────────────────────────────────┐            │
-   │  │ fastapi-api                         │            │
-   │  │  - 운영 라우터 (grades, ...)        │            │
-   │  │  - /api/v1/analytics/* (read agg)   │            │
-   │  │  - /api/v1/chat (LLM 호출)          │            │
-   │  └──┬──────────────┬────────────────┬──┘            │
-   │     │ SQL          │ outbox INSERT  │ HTTPS         │
-   │     ▼              ▼                ▼               │
-   │  ┌──────────────────────┐    [LLM Provider (외부)]  │
-   │  │ Postgres             │                           │
-   │  │  public.*  (OLTP)    │                           │
-   │  │  public.outbox       │                           │
-   │  │  analytics.* (OLAP)  │                           │
-   │  └──┬──────────────▲────┘                           │
-   │     │ poll unsent  │ UPSERT agg                     │
-   │     ▼              │                                │
-   │  ┌─────────────┐   │                                │
-   │  │ outbox-     │   │                                │
-   │  │ publisher   │   │                                │
-   │  │ (aiokafka)  │   │                                │
-   │  └──────┬──────┘   │                                │
-   │         │ produce  │                                │
-   │         ▼          │                                │
-   │  ┌──────────────┐  │                                │
-   │  │ Kafka KRaft  │  │                                │
-   │  │ (단일 노드)  │  │ Fallback: Redpanda             │
-   │  └──────┬───────┘  │                                │
-   │         │ consume  │                                │
-   │         ▼          │                                │
-   │  ┌──────────────────┐                               │
-   │  │ analytics-worker │                               │
-   │  │ (aiokafka cons.) │  scale=N (consumer group)     │
-   │  └──────────────────┘                               │
-   └─────────────────────────────────────────────────────┘
-```
+본 절은 위 문서에 없는 **구현·운영 디테일**만 보존한다.
 
-| 레이어 | 기술 | 역할 |
-|--------|------|------|
-| Frontend | React 18, TS, Tailwind, Zustand, TanStack Query, Recharts | UI, 상태, 차트, 챗 위젯 |
-| Backend API | FastAPI, Pydantic v2, SQLAlchemy 2.0, Alembic | REST, 비즈니스 로직, RBAC, outbox INSERT, 챗봇 엔드포인트 |
-| Outbox Publisher | Python 3.11, aiokafka | `public.outbox` polling → Kafka topic produce |
-| Analytics Worker | Python 3.11, aiokafka | Kafka consumer (consumer group) → `analytics.*` UPSERT |
-| Message Stream | Apache Kafka KRaft (단일 노드) | 운영 → 분석 이벤트 전달. Fallback: Redpanda |
-| Database | PostgreSQL — `public` (OLTP) + `public.outbox` + `analytics` (OLAP) | 단일 인스턴스 |
-| 인증 | JWT (python-jose + passlib bcrypt) | Access 1h / Refresh 7d |
-| 배포 | docker-compose (로컬 평가) | 모든 서비스 단일 compose 파일 |
+### 핵심 설계 결정사항 (구현 디테일)
 
-### 핵심 설계 결정사항
-
-1. **멀티테넌트 격리**: 단일 DB + `school_id` Row-Level Filtering. FastAPI 레이어에서 1차 스코핑 필수. Postgres RLS는 선택적 보조 레이어 (평가 후 검토).
-2. **인증**: JWT Bearer 토큰. `access_token`은 메모리(Zustand store) 저장. `refresh_token`은 HttpOnly Cookie. localStorage 금지.
-3. **실시간**: **30초 폴링** 방식으로 인앱 알림 구현 (SSE/WebSocket push는 평가 후).
-4. **성적 등급**: 원점수 기준 9등급 참고값 제공 (석차 기반 아님). 추후 전환 가능하도록 계산 로직 서비스 레이어에서 분리.
-5. **파일 생성**: 클라이언트 사이드 전용 (SheetJS: Excel, jsPDF: PDF). 서버는 JSON 데이터만 제공, 파일 변환은 브라우저에서 수행.
-6. **초기 설정 전략**: School 및 교사 계정은 Alembic seed script로 생성. 교사가 앱 내에서 학급/과목/학기를 직접 설정.
-7. **교사 스코핑 (MVP 제약)**: 담임 교사 1명 = 담당 Class 1개 구조. 교과 교사 다중 반 담당은 평가 후 ClassTeacher M:M 테이블로 확장 예정.
-8. **CORS**: 로컬 docker-compose 환경에서 frontend origin만 허용 (`ALLOWED_ORIGINS` 환경변수).
-9. **Rate Limiting**: 로그인 엔드포인트와 `/api/v1/chat`에 IP/사용자 기반 제한 (slowapi 라이브러리 사용).
-10. **OLAP 분리 (v2.1)**: 운영 트랜잭션은 `public` 스키마, 분석 집계는 `analytics` 스키마. 두 스키마는 동일 PG 인스턴스.
-11. **CDC 파이프라인 (v2.1)**: **Outbox 패턴 + Kafka KRaft**. 운영 라우터가 도메인 변경과 같은 트랜잭션으로 `public.outbox`에 INSERT → `outbox-publisher`(aiokafka)가 미발행 row를 polling해 Kafka 토픽으로 produce → `analytics-worker`(aiokafka consumer group)가 `analytics.*` UPSERT. 자세한 근거는 ADR-002.
-12. **컨테이너 (v2.1)**: 모든 서비스(`frontend`, `fastapi-api`, `outbox-publisher`, `analytics-worker`, `kafka`, `postgres`)는 단일 `docker-compose.yml`로 묶는다. 확장성은 `docker-compose up --scale analytics-worker=3`으로 시연.
-13. **Chatbot (v2.1)**: 별도 서비스 분리하지 않고 FastAPI 백엔드의 단일 라우터(`POST /api/v1/chat`)로 구현. 답변 범위를 학급 단위 통계로 제한(k≥5 실질). 컨텍스트 학생명·학번은 `chatbot/sanitizer.py`에서 단순 치환(`학생A`, `seq_001`).
+1. **초기 설정 전략**: School + 최초 교사(teacher) 계정은 Alembic seed script로 생성 (CLI, 배포 시 1회 실행). 교사가 앱 로그인 후 Semester → Class → Subject 순으로 직접 생성. **앱 내 관리자 UI 없음** (MVP 범위 외).
+2. **CORS**: 로컬 docker-compose 환경에서 frontend origin만 허용 (`ALLOWED_ORIGINS` 환경변수, JSON 배열 문자열).
+3. **Rate Limiting**: 로그인 엔드포인트와 `/api/v1/chat`에 slowapi 기반 제한. 챗봇은 사용자 ID 키, 로그인은 IP 키.
+4. **타 학교 데이터 접근**: 404 반환 (403 대신 — 존재 자체를 숨김. IDOR 방지). §4.3과 일관.
+5. **챗봇 마스킹 토큰 확장**: 학생 26명 초과 시 `학생A..Z` → `학생AA..ZZ`로 두 글자 확장 (~702명까지 안전). 라우터 정규식 `학생[A-Z]{1,2}`로 양쪽 매칭. 상세 §10.3.
 
 ---
 
@@ -298,14 +235,27 @@ counseling_updated BOOLEAN    NOT NULL  DEFAULT true
 
 ## 3. API Specification
 
+> **OpenAPI 자동 생성**: 모든 엔드포인트의 요청·응답 Pydantic 스키마는 백엔드 기동 후 `http://localhost:8000/docs` (Swagger UI) 또는 `/openapi.json`에서 확인 가능. 본 절은 OpenAPI에 표현되지 않는 **에러 코드 / RBAC 뉘앙스 / side effect / 도메인 규칙**을 명시한다.
+
 ### 공통 규칙
 
 - **Base URL**: `/api/v1`
 - **Content-Type**: `application/json` (파일 업로드 제외)
-- **인증**: `Authorization: Bearer <access_token>` (로그인, 리프레시 제외)
+- **인증**: `Authorization: Bearer <access_token>` (로그인, 리프레시, 자명한 표 아래 단순 엔드포인트 제외)
 - **오류 응답 형식**: `{ "detail": "message", "code": "ERROR_CODE" }`
-- **페이지네이션**: MVP 구현은 대부분 목록을 배열로 반환합니다. `skip/limit`은 future contract로 남겨두고, 현재 코드 기준으로는 배열 응답을 우선합니다.
-- **페이지네이션 일관성**: 현재 구현 기준 목록 조회는 배열 형식입니다. 단건/요약은 객체 직접 반환.
+- **페이지네이션**: 목록 조회는 배열 형식. 단건/요약은 객체 직접 반환. `skip/limit`은 future contract.
+
+### 단순 엔드포인트 인벤토리
+
+요청·응답이 자명하고 별도 contract가 없는 엔드포인트는 다음 표로 갈음한다. 상세 스키마는 `/docs` 참조.
+
+| Method | Path | 설명 | Authorization |
+|--------|------|------|---------------|
+| POST | `/auth/logout` | refresh_token 쿠키 삭제, 204 | 인증된 모든 사용자 |
+| GET | `/auth/me` | 본인 user 정보 | 인증된 모든 사용자 |
+| GET | `/semesters` | 학기 목록 | 인증된 모든 사용자 |
+| PATCH | `/notifications/read-all` | 본인 알림 전체 읽음 처리 | 인증된 모든 사용자 |
+| GET | `/notifications/preferences` | 본인 알림 설정 조회 | 인증된 모든 사용자 |
 
 ---
 
@@ -345,21 +295,7 @@ Response 401: { "code": "AUTH_TOKEN_EXPIRED" }
 Authorization: None
 ```
 
-#### POST /auth/logout
-```
-Response 204
-Set-Cookie: refresh_token=; Max-Age=0  -- 쿠키 삭제
-
-Authorization: Any authenticated user
-```
-
-#### GET /auth/me
-```
-Response 200:
-  { "id": "uuid", "email": "string", "name": "string", "role": "string", "school_id": "uuid" }
-
-Authorization: Any authenticated user
-```
+> `POST /auth/logout`, `GET /auth/me` — §3 머리말 "단순 엔드포인트 인벤토리" 표 참조.
 
 ---
 
@@ -379,12 +315,7 @@ Response 409: { "code": "SEMESTER_DUPLICATE" }
 Authorization: teacher
 ```
 
-#### GET /semesters
-```
-Response 200: [{ "id": "uuid", "year": "integer", "term": "integer" }]
-
-Authorization: Any authenticated user
-```
+> `GET /semesters` — 인벤토리 표 참조.
 
 #### POST /classes
 ```
@@ -846,19 +777,7 @@ Response 403: { "code": "NOTIFICATION_NOT_OWNER" }
 Authorization: Any authenticated user (본인 알림만)
 ```
 
-#### PATCH /notifications/read-all
-```
-Response 200: { "updated_count": "integer" }
-Authorization: Any authenticated user
-```
-
-#### GET /notifications/preferences
-```
-Response 200:
-  { "grade_input": "boolean", "feedback_created": "boolean", "counseling_updated": "boolean" }
-
-Authorization: Any authenticated user
-```
+> `PATCH /notifications/read-all`, `GET /notifications/preferences` — 인벤토리 표 참조.
 
 #### PUT /notifications/preferences
 ```
@@ -1256,11 +1175,40 @@ CREATE TABLE analytics.fact_attendance_event (
   event_id      BIGSERIAL PRIMARY KEY,
   attendance_id UUID NOT NULL,
   student_id    UUID NOT NULL,
+  semester_id   UUID,                  -- SMS-78: outbox publisher가 resolve해 채움 (nullable, 백필 여유)
   date          DATE NOT NULL,
   status        VARCHAR(15) NOT NULL,
   op            VARCHAR(10) NOT NULL,
   occurred_at   TIMESTAMP NOT NULL DEFAULT now()
 );
+CREATE INDEX ix_fact_attendance_event_student_semester
+  ON analytics.fact_attendance_event (student_id, semester_id);
+
+CREATE TABLE analytics.fact_feedback_event (
+  event_id      BIGSERIAL PRIMARY KEY,
+  feedback_id   UUID NOT NULL,
+  student_id    UUID NOT NULL,
+  semester_id   UUID,
+  category      VARCHAR(15),           -- score | behavior | attendance | attitude
+  op            VARCHAR(10) NOT NULL,  -- INSERT | UPDATE | DELETE
+  occurred_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_fact_feedback_event_student_semester
+  ON analytics.fact_feedback_event (student_id, semester_id);
+CREATE INDEX ix_fact_feedback_event_feedback
+  ON analytics.fact_feedback_event (feedback_id, occurred_at DESC);
+
+CREATE TABLE analytics.fact_counseling_event (
+  event_id      BIGSERIAL PRIMARY KEY,
+  counseling_id UUID NOT NULL,
+  student_id    UUID NOT NULL,
+  teacher_id    UUID NOT NULL,
+  date          DATE,
+  op            VARCHAR(10) NOT NULL,  -- INSERT | UPDATE
+  occurred_at   TIMESTAMP NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_fact_counseling_event_student
+  ON analytics.fact_counseling_event (student_id, occurred_at DESC);
 
 -- 집계 캐시 (UPSERT, consumer가 갱신)
 CREATE TABLE analytics.agg_student_subject (
@@ -1287,35 +1235,55 @@ CREATE TABLE analytics.agg_student_overall (
   refreshed_at   TIMESTAMP NOT NULL DEFAULT now(),
   PRIMARY KEY (student_id, semester_id)
 );
+
+-- Dead-letter sink (SMS-80): poison 메시지(decode 실패 / 필수 필드 누락 / 알 수 없는 topic)는
+-- 이 테이블에 기록 후 consumer offset commit. transient error(DB 일시 오류 등)는 commit 안 함.
+CREATE TABLE analytics.dead_letter_event (
+  id           BIGSERIAL PRIMARY KEY,
+  topic        VARCHAR(50) NOT NULL,
+  partition    INTEGER,
+  offset_      BIGINT,
+  raw_value    BYTEA,
+  error        TEXT NOT NULL,
+  occurred_at  TIMESTAMP NOT NULL DEFAULT now()
+);
 ```
+
+**Counseling은 집계 미반영**: counseling 이벤트는 `fact_counseling_event`에 audit 목적으로만 기록되며 `agg_student_overall`에 영향 없음. 향후 BI 요구가 생기면 별도 agg 테이블 추가.
+
+**Semester 바인딩 주의**: `Semester` 모델은 (year, term)만 가지며 date range가 없어 `Attendance`/`Feedback`을 의미적으로 매핑할 수 없다. v2.1에선 operational 라우터가 outbox INSERT 시점에 "가장 최근 (year DESC, term DESC) 학기"를 resolve해 payload·fact row에 박는다 (`app/services/semester.py:current_semester_id`). 의미적 정확도가 필요하면 향후 `Semester`에 date range 컬럼 추가 또는 `Attendance`/`Feedback`에 직접 FK 부여 필요.
 
 ### 9.2 운영 라우터의 Outbox INSERT (트랜잭션 일관성)
 
 운영 도메인 변경(예: grade UPSERT) 직후 **같은 트랜잭션** 안에서 `public.outbox`에 row를 INSERT한다. 이로써 도메인 변경이 commit되면 outbox row도 반드시 함께 영속화되며, broker가 다운돼도 이벤트가 유실되지 않는다.
 
 ```python
-# app/services/grades.py — pseudo
-async def upsert_grade(db: AsyncSession, *, student_id: UUID, ...) -> Grade:
-    async with db.begin():
-        grade = await _upsert_grade_row(db, student_id=student_id, ...)
-        await db.execute(
-            insert(Outbox).values(
-                aggregate_type="grade",
-                aggregate_id=grade.id,
-                topic="grade_events",
-                payload={
-                    "grade_id": str(grade.id),
-                    "student_id": str(student_id),
-                    "subject_id": str(grade.subject_id),
-                    "semester_id": str(grade.semester_id),
-                    "op": "UPSERT",
-                },
-            )
-        )
+# app/services/grade.py — pseudo
+async def create_grade(db: AsyncSession, *, student_id: UUID, ...) -> Grade:
+    grade = Grade(student_id=student_id, ...)
+    db.add(grade)
+    await db.flush()  # grade.id 채워야 outbox row의 aggregate_id로 사용 가능
+    db.add(Outbox(
+        aggregate_type="grade",
+        aggregate_id=grade.id,
+        topic="grade_events",
+        payload={
+            "grade_id": str(grade.id),
+            "student_id": str(student_id),
+            "subject_id": str(grade.subject_id),
+            "semester_id": str(grade.semester_id),
+            "score": float(grade.score) if grade.score is not None else None,
+            "grade_rank": grade.grade_rank,
+            "op": "INSERT",  # update_grade는 "UPDATE", delete는 "DELETE"
+        },
+    ))
+    await db.commit()
     return grade
 ```
 
-`attendance`, `feedback`, `counseling` 라우터에서 동일한 패턴 적용.
+`attendance`, `feedback`, `counseling` 라우터에서 동일한 패턴 적용. `op` 값은 도메인 작업 종류 그대로 (`INSERT`/`UPDATE`/`DELETE`).
+
+**event_id envelope**: outbox row의 `event_id`는 publisher가 publish 직전에 payload에 주입한다 (`{**row.payload, "event_id": row.event_id}`). consumer는 이 값을 PK로 사용해 `INSERT ... ON CONFLICT (event_id) DO NOTHING`으로 idempotency를 보장. 운영 라우터는 outbox row를 만들 때만 책임지고 event_id 주입은 신경 쓰지 않는다.
 
 ### 9.3 Outbox Publisher (Kafka producer)
 
@@ -1351,33 +1319,106 @@ async def main() -> None:
 
 ### 9.4 Analytics Worker (Kafka consumer)
 
+단일 worker 프로세스가 4개 topic을 구독하고 record의 `topic` 필드로 핸들러를 dispatch한다.
+
 ```python
 # app/workers/analytics.py — pseudo
-async def main() -> None:
-    consumer = AIOKafkaConsumer(
-        "grade_events", "attendance_events", "feedback_events", "counseling_events",
-        bootstrap_servers=settings.KAFKA_BOOTSTRAP,
-        group_id="analytics-worker",
-        enable_auto_commit=False,
-        auto_offset_reset="earliest",
-    )
+SUBSCRIBED_TOPICS = (
+    "grade_events", "attendance_events", "feedback_events", "counseling_events",
+)
+
+
+async def dispatch_event(payload: dict, *, repo: AnalyticsRepository, topic: str) -> None:
+    if topic == "grade_events":         await process_event(payload, repo=repo)
+    elif topic == "attendance_events":  await process_attendance_event(payload, repo=repo)
+    elif topic == "feedback_events":    await process_feedback_event(payload, repo=repo)
+    elif topic == "counseling_events":  await process_counseling_event(payload, repo=repo)
+    else:                               raise ValueError(f"unknown topic: {topic!r}")
+
+
+async def run(*, consumer, session_factory, ...):
     await consumer.start()
     try:
-        async for msg in consumer:
-            event = json.loads(msg.value.decode())
-            match msg.topic:
-                case "grade_events":      await refresh_grade_aggregates(event)
-                case "attendance_events": await refresh_attendance_aggregates(event)
-                case "feedback_events":   await refresh_feedback_aggregates(event)
-                case "counseling_events": await refresh_counseling_aggregates(event)
-            await consumer.commit()
+        while not stop_event.is_set():
+            record = await consumer.getone()
+            try:
+                try:
+                    payload = decode_record(record.value)  # raises ValueError on bad JSON
+                except (JSONDecodeError, ValueError) as exc:
+                    raise PoisonMessageError(f"decode failed: {exc}") from exc
+                async with session_factory() as db:
+                    repo = PostgresAnalyticsRepo(db)
+                    try:
+                        await dispatch_event(payload, repo=repo, topic=record.topic)
+                    except (KeyError, ValueError) as exc:
+                        raise PoisonMessageError(f"dispatch failed: {exc}") from exc
+                    await db.commit()
+                await consumer.commit()
+            except PoisonMessageError as exc:
+                # 영구 오류: dead_letter_event에 기록, offset commit해서 같은 메시지 무한 retry 회피
+                async with session_factory() as db:
+                    await PostgresAnalyticsRepo(db).record_dead_letter(
+                        topic=record.topic, partition=record.partition,
+                        offset=record.offset, raw_value=record.value, error=str(exc),
+                    )
+                    await db.commit()
+                await consumer.commit()
+            except Exception:
+                # transient: DB 일시 오류 등. offset commit 안 함 → 다음 iteration에서 같은 메시지 재시도
+                logger.exception("transient error; will retry")
+                await asyncio.sleep(backoff)
     finally:
         await consumer.stop()
 ```
 
-- **idempotency**: `analytics.fact_*`는 append-only지만 `(grade_id, op, occurred_at)` 등 dedupe key로 중복 방지. `analytics.agg_*`는 UPSERT.
-- **수평 확장**: `docker-compose up --scale analytics-worker=3` → consumer group이 자동으로 파티션 분배.
-- **error handling**: 실패 이벤트는 `analytics.dead_letter`에 기록 + 로그 알림.
+#### 핸들러 별 처리 매트릭스
+
+| Topic | Fact 테이블 | Agg 영향 |
+|---|---|---|
+| `grade_events` | `fact_grade_event` (INSERT ON CONFLICT) | `agg_student_subject` + `agg_student_overall` UPSERT |
+| `attendance_events` | `fact_attendance_event` | `agg_student_overall.attendance_present_rate` |
+| `feedback_events` | `fact_feedback_event` | `agg_student_overall.feedback_count` (DELETE op 제외) |
+| `counseling_events` | `fact_counseling_event` | (없음 — audit only) |
+
+#### Agg 재계산 패턴 (`recompute_agg_overall`)
+
+운영의 부분 변경(INSERT/UPDATE/DELETE)이 아니라 **현재 fact 상태로부터 항상 전체 재계산** 한다. UPDATE 이벤트가 fact를 중복으로 쌓는 문제는 `DISTINCT ON (<aggregate_id>) ORDER BY occurred_at DESC` CTE로 해결.
+
+```sql
+-- agg_student_overall은 grade/attendance/feedback 컬럼을 한 번에 UPSERT
+WITH latest_grades AS (
+  SELECT DISTINCT ON (grade_id) score
+  FROM analytics.fact_grade_event WHERE student_id=$1 AND semester_id=$2
+  ORDER BY grade_id, occurred_at DESC, event_id DESC
+),
+latest_attendance AS (...),
+latest_feedback AS (
+  SELECT DISTINCT ON (feedback_id) op
+  FROM analytics.fact_feedback_event WHERE student_id=$1 AND semester_id=$2
+  ORDER BY feedback_id, occurred_at DESC, event_id DESC
+)
+INSERT INTO analytics.agg_student_overall (...) VALUES (...)
+ON CONFLICT (student_id, semester_id) DO UPDATE SET ...
+```
+
+#### Idempotency
+
+- 모든 fact 테이블이 `event_id` PK + `ON CONFLICT (event_id) DO NOTHING` → 중복 메시지 0 행 추가
+- consumer는 fact INSERT가 no-op(이미 처리됨)이면 agg recompute를 skip
+- 즉 동일 메시지가 N번 와도 fact rowcount·agg 값 모두 불변
+
+#### 수평 확장
+
+`docker-compose up --scale analytics-worker=3` → consumer group이 파티션 자동 분배. group_id가 동일하면 Kafka가 partition rebalance를 처리. 단, 각 (student_id, semester_id)에 대한 agg UPSERT는 동시 실행 가능성이 있어 row-level lock에 의존 — Postgres `ON CONFLICT DO UPDATE`는 자동 lock.
+
+#### Dead-Letter 정책
+
+| 에러 유형 | 처리 | offset commit |
+|---|---|---|
+| Permanent (decode 실패, 필수 필드 누락, 알 수 없는 topic) | `analytics.dead_letter_event` INSERT | ✅ commit (poison 메시지가 consumer를 무한 차단하지 않도록) |
+| Transient (DB 다운, 일시 네트워크 오류) | log + exponential backoff | ❌ no commit → 다음 iteration에서 재시도 |
+
+운영 측에선 `SELECT * FROM analytics.dead_letter_event ORDER BY occurred_at DESC` 로 poison 메시지를 검토 후 producer 측 수정 또는 수동 replay.
 
 ### 9.5 분석 API
 
@@ -1386,20 +1427,24 @@ async def main() -> None:
 | GET | `/api/v1/analytics/teachers/me/dashboard` | 교사 메인 위젯 (담당 학급 요약) | teacher |
 | GET | `/api/v1/analytics/students/{id}/overview` | 학생 학습 요약 (학기 추이) | teacher (담당) |
 | GET | `/api/v1/analytics/classes/{id}/distribution` | 학급 점수 분포 | teacher (담임) |
-| GET | `/api/v1/analytics/subjects/{id}/trend` | 과목 평균 추이 | teacher (담임) |
 
 응답은 `analytics.agg_*` 테이블에서 직접 조회. 무거운 집계 쿼리 금지.
 
+> 과목 추이(`/analytics/subjects/{id}/trend`)는 미구현 — 평가 후 트랙. 학생별 학기 추이는 `students/{id}/overview` 응답의 `semester_history`로 갈음한다.
+
 ### 9.6 일관성 보장
 
-| 항목 | 정책 |
-|------|------|
-| 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (Kafka 발행 + consumer 처리는 통상 sub-second) |
-| 정합성 검증 | 통합 테스트(testcontainers) + `scripts/check_consistency.py` (운영 row vs fact row 비교) |
-| Publisher 다운 | outbox row commit됨 → 부팅 시 `WHERE sent_at IS NULL` 자동 catch-up |
-| Consumer 다운 | Kafka offset 보관 → 재기동 시 마지막 commit offset부터 재구독 |
-| Broker 다운 | publisher가 producer.send에서 retry. 운영 트랜잭션은 정상 commit (outbox row 누적) |
-| 백필 | Alembic data migration 스크립트 (`scripts/backfill_analytics.py`): 운영 테이블 전체 스캔 → outbox INSERT (publisher가 catch-up) |
+| 항목 | 정책 | 검증 |
+|------|------|------|
+| 실시간성 | 운영 변경 → 분석 반영 ≤ 1분 (Kafka 발행 + consumer 처리는 통상 sub-second) | `test_pipeline_propagates_grade_event_within_sla` (SMS-54) |
+| 정합성 검증 | testcontainers 통합 테스트가 운영 row 수 vs `analytics.fact_*` row 수를 자동 비교 (별도 CLI 스크립트 미도입) | `backend/tests/integration/*` (Sprint 1·2, `pytest -m integration`) |
+| Idempotency (중복 메시지) | 모든 fact 테이블이 `event_id` PK + `ON CONFLICT DO NOTHING`. consumer가 no-op 감지 시 agg recompute skip → fact rowcount·agg 값 모두 불변 | `test_idempotency_e2e.py` 5개 시나리오 (SMS-81) |
+| Publisher 다운 | outbox row commit됨 → 부팅 시 `WHERE sent_at IS NULL` 자동 catch-up | `test_publisher_drains_backlog_after_late_start` (SMS-54) |
+| Consumer 다운 | Kafka offset 보관 → 재기동 시 마지막 commit offset부터 재구독, 이벤트 누락 0 | `test_consumer_resumes_after_restart_without_loss` (SMS-54) |
+| Broker 다운 | publisher가 producer.send에서 retry. 운영 트랜잭션은 정상 commit (outbox row 누적) | SMS-52 catch-up 단위 테스트 |
+| Poison message | decode 실패 / 필수 필드 누락 / 알 수 없는 topic → `analytics.dead_letter_event` 기록 + offset commit. main consumer는 차단되지 않음 | `test_malformed_payload_routes_to_dead_letter_table` (SMS-81) |
+| Transient error (DB 일시 오류 등) | offset commit 안 함 + exponential backoff. 다음 iteration에서 재시도 | run() 루프 코드 |
+| 백필 | **평가 후 트랙**. 평가용 시드는 `scripts/demo_seed.py`가 운영 INSERT와 함께 outbox row를 stage하므로 publisher/consumer가 정상 흐름으로 채운다. 실운영 도입 시 전체 스캔 → outbox 발행 스크립트 필요 | 미구현 |
 
 ---
 
@@ -1421,65 +1466,89 @@ async def main() -> None:
         │ 5. LLM SDK 호출 (provider는 환경변수로 단일 선택)
         │ 6. 응답 후처리 (token → 실제 학생 매핑)
         ▼
-[LLM Provider (외부, OpenAI 또는 Anthropic)]
+[LLM Provider (외부, OpenAI 호환 endpoint — 단일)]
 ```
 
-### 10.2 LLM 호출 (단일 provider 직접 호출)
+### 10.2 LLM 호출 (OpenAI 호환 endpoint, 단일)
 
-별도 `LLMClient` 추상화 인터페이스는 도입하지 않는다. 환경변수 `LLM_PROVIDER`로 하나의 SDK를 선택해 직접 호출.
+`OPENAI_API_KEY` + `LLM_BASE_URL`(기본 `https://api.openai.com/v1`, Kimi/Together/Groq 등 호환 게이트웨이로 전환 가능)로 OpenAI SDK 하나를 호출한다. 키 미설정 또는 `LLM_PROVIDER=stub`이면 결정론적 `StubLlmClient`로 폴백.
+
+테스트 용이성을 위해 `LlmClient` Protocol을 두고 의존성 주입(`tests/test_chat.py`가 `app.dependency_overrides[get_llm_client]`로 `FakeLlm` 주입) — 의도된 진화.
 
 ```python
-# app/chatbot/llm.py — pseudo
-async def complete(prompt: str, context: list[dict]) -> str:
-    provider = settings.LLM_PROVIDER  # "openai" | "anthropic"
-    if provider == "openai":
-        client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-        resp = await client.chat.completions.create(
-            model=settings.LLM_MODEL,
-            messages=[{"role": "system", "content": system_prompt(context)},
-                      {"role": "user", "content": prompt}],
-            max_tokens=1024,
-        )
-        return resp.choices[0].message.content
-    elif provider == "anthropic":
-        client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-        resp = await client.messages.create(
-            model=settings.LLM_MODEL,
-            max_tokens=1024,
-            system=system_prompt(context),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return resp.content[0].text
-    raise ValueError(f"unknown provider: {provider}")
+# app/services/llm_client.py — 실제 구조 (요약)
+class LlmClient(Protocol):
+    async def complete(self, *, system: str, user: str) -> str: ...
+
+class StubLlmClient:
+    async def complete(self, *, system, user) -> str:
+        return f"[stub] ctx_chars={len(system)} msg={user[:80]}"
+
+class OpenAiLlmClient:
+    def __init__(self, *, api_key, base_url, model, timeout_seconds, max_tokens):
+        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout_seconds)
+        ...
+    async def complete(self, *, system, user) -> str:
+        try:
+            resp = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+                max_tokens=self._max_tokens,
+            )
+        except APITimeoutError as exc:
+            raise AppException(504, "LLM 응답 시간 초과", "CHAT_TIMEOUT") from exc
+        except APIError as exc:
+            raise AppException(502, "LLM 서비스 오류", "CHAT_UPSTREAM_ERROR") from exc
+        return resp.choices[0].message.content or ""
 ```
+
+Anthropic 어댑터는 평가 후 트랙. 현재는 OpenAI 호환 endpoint 하나만 지원한다.
 
 ### 10.3 PII 마스킹 규약
 
 ```python
-# app/chatbot/sanitizer.py — pseudo
+# app/services/llm_sanitizer.py — 실제 구조 (요약)
+MIN_SAMPLE_SIZE = 5
+_PII_FIELDS = ("student_id", "email", "phone")
+_SUBJECT_NOISE_FIELDS = ("subject_id",)  # SMS-96 — UUID는 LLM이 ground 불가
+
+class SmallSampleError(Exception): ...
+
+def _index_to_token(i: int) -> str:
+    """1-indexed → 학생A..Z (i≤26), 학생AA..ZZ (i≤702). chr(64+i) 한 글자만 쓰면
+    i≥27에서 [A-Z] 밖 문자가 생성돼 라우터 정규식이 silent drop 한다."""
+
 def mask_context(rows: list[dict]) -> tuple[list[dict], dict[str, UUID]]:
-    """학급 단위 통계만 받음. 단일 학생 식별 불가능한 응답이 보장되도록 사전에 k≥5 필터."""
+    if len(rows) < MIN_SAMPLE_SIZE:
+        raise SmallSampleError(...)  # 라우터가 잡아 거부 메시지 반환
     token_map: dict[str, UUID] = {}
-    masked_rows = []
+    masked_rows: list[dict] = []
     for i, row in enumerate(rows, start=1):
-        token = f"학생{chr(64 + i)}"  # 학생A, 학생B, ...
-        if "student_id" in row:
-            token_map[token] = row["student_id"]
-            row = {**row, "student_name": token, "student_number": f"seq_{i:03d}"}
-            row.pop("student_id", None)
-            row.pop("email", None)
-            row.pop("phone", None)
-        masked_rows.append(row)
+        if "student_id" not in row:        # 집계 행은 통과
+            masked_rows.append(row); continue
+        token = _index_to_token(i)
+        token_map[token] = row["student_id"]
+        new_row = {**row, "student_name": token, "student_number": f"seq_{i:03d}"}
+        for f in _PII_FIELDS: new_row.pop(f, None)
+        if isinstance(new_row.get("subjects"), list):
+            new_row["subjects"] = [
+                {k: v for k, v in s.items() if k not in _SUBJECT_NOISE_FIELDS}
+                for s in new_row["subjects"]
+            ]
+        masked_rows.append(new_row)
     return masked_rows, token_map
 ```
 
 | 원본 | 마스킹 |
 |------|--------|
-| `김철수` (학생명) | `학생A` |
+| `김철수` (학생명) | `학생A`, `학생B`, …, `학생Z`, `학생AA`, … (~702명까지 안전) |
 | `student_number=15` | `seq_015` |
 | 학부모 이메일/전화 | (컨텍스트에서 제거) |
 | `student_id` (UUID) | (컨텍스트에서 제거, 서버 메모리 매핑만 유지) |
+| `subjects[].subject_id` (UUID) | (컨텍스트에서 제거, SMS-96) |
 | 교사명 | 유지 (질의자 본인) |
+| 학생 수 < 5 (k≥5 미달) | `SmallSampleError` → LLM 호출 안 함, 거부 메시지 반환 |
 
 응답 후처리에서 `학생A` 등의 token을 매핑 테이블로 실제 학생 객체로 치환하여 클라이언트에 전달.
 
@@ -1529,11 +1598,11 @@ Rate Limit: 10회/분 per user (slowapi)
 | REQ-061~062 | §3.9 (클라이언트 jsPDF) | ✅ |
 | REQ-005 | 비밀번호 재설정 | ✅ |
 | US-007 AC (알림 ON/OFF) | §3.8 NotificationPreference | ✅ |
-| REQ-070 (분석 스키마 분리) | §9.1 analytics.* | 🚧 v2.1 |
-| REQ-071 (Outbox + Kafka 이벤트 적재) | §9.2~9.4 outbox INSERT + publisher + consumer | 🚧 v2.1 |
-| REQ-072 (집계 테이블) | §9.1 agg_student_subject/overall | 🚧 v2.1 |
-| REQ-073 (교사 대시보드) | §9.5 GET /analytics/* | 🚧 v2.1 |
-| REQ-074 (≤ 1분 반영) | §9.6 일관성 보장 | 🚧 v2.1 |
+| REQ-070 (분석 스키마 분리) | §9.1 analytics.* (Sprint 1 SMS-49) | ✅ v2.1 |
+| REQ-071 (Outbox + Kafka 이벤트 적재) | §9.2~9.4 (Sprint 1 SMS-50~53, Sprint 2 SMS-78~80 4 도메인 확장) | ✅ v2.1 |
+| REQ-072 (집계 테이블) | §9.1 agg_student_subject/overall (Sprint 2에서 attendance_present_rate + feedback_count까지 채움) | ✅ v2.1 |
+| REQ-073 (교사 대시보드) | §9.5 GET /analytics/* | 🚧 v2.1 (Sprint 3 SMS-74) |
+| REQ-074 (≤ 1분 반영) | §9.6 + Sprint 1 SMS-54 + Sprint 2 SMS-81 e2e idempotency | ✅ v2.1 |
 | REQ-075 (scale=N 시연) | §1 docker-compose `--scale analytics-worker=3` | 🚧 v2.1 |
 | REQ-080~083 (AI 어시스턴트 단일 엔드포인트 + PII 마스킹) | §10 AI 어시스턴트 | 🚧 v2.1 |
 

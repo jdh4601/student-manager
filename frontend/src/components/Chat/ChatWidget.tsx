@@ -1,0 +1,128 @@
+import { useEffect, useRef, useState } from 'react';
+
+import { useChatStore } from '../../stores/chatStore';
+
+const SUGGESTED_QUESTIONS = [
+  '이번 학기 우리 반 영어 평균이 어때?',
+  '최근에 점수가 가장 많이 떨어진 과목은?',
+  '이번 학기 우리 반 성적 분포 알려줘',
+];
+
+interface ChatWidgetProps {
+  autoFocus?: boolean;
+}
+
+export default function ChatWidget({ autoFocus = false }: ChatWidgetProps) {
+  const messages = useChatStore((s) => s.messages);
+  const isLoading = useChatStore((s) => s.isLoading);
+  const send = useChatStore((s) => s.send);
+
+  const [input, setInput] = useState('');
+  const listEndRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
+
+  useEffect(() => {
+    if (autoFocus) {
+      inputRef.current?.focus();
+    }
+  }, [autoFocus]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const text = input.trim();
+    if (text.length === 0 || isLoading) return;
+    setInput('');
+    await send(text);
+  }
+
+  return (
+    <div className="flex flex-col h-full min-h-0">
+      <div
+        className="flex-1 overflow-y-auto p-3 space-y-3"
+        aria-live="polite"
+        aria-busy={isLoading}
+      >
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={
+              m.role === 'user' ? 'flex justify-end' : 'flex justify-start'
+            }
+          >
+            <div
+              className={`max-w-[85%] px-3 py-2 rounded-lg text-sm whitespace-pre-wrap ${
+                m.role === 'user'
+                  ? 'bg-blue-600 text-white'
+                  : m.role === 'error'
+                    ? 'bg-red-50 text-red-700 border border-red-200'
+                    : 'bg-gray-100 text-gray-900'
+              }`}
+            >
+              {m.text}
+              {m.role === 'assistant' && m.refs && m.refs.length > 0 && (
+                <div className="mt-2 text-xs text-gray-500 border-t border-gray-200 pt-1.5">
+                  관련 학생: {m.refs.map((r) => r.name).join(', ')}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-gray-100 text-gray-500 text-sm px-3 py-2 rounded-lg">
+              생각 중...
+            </div>
+          </div>
+        )}
+        <div ref={listEndRef} />
+      </div>
+
+      {messages.length === 0 && !isLoading && (
+        <div className="px-3 pt-2 pb-1 flex flex-col gap-1.5">
+          <p className="text-[11px] text-gray-400 font-medium">예시 질문</p>
+          {SUGGESTED_QUESTIONS.map((q) => (
+            <button
+              key={q}
+              type="button"
+              onClick={() => {
+                setInput(q);
+                inputRef.current?.focus();
+              }}
+              className="text-left text-xs text-gray-700 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-lg px-2.5 py-1.5 transition-colors"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <form
+        onSubmit={handleSubmit}
+        className="border-t border-gray-200 p-3 flex gap-2"
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="질문을 입력하세요..."
+          maxLength={1000}
+          disabled={isLoading}
+          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50"
+          aria-label="메시지 입력"
+        />
+        <button
+          type="submit"
+          disabled={isLoading || input.trim().length === 0}
+          className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+        >
+          전송
+        </button>
+      </form>
+    </div>
+  );
+}
