@@ -39,7 +39,7 @@ tags_metadata = [
     {"name": "notifications", "description": "인앱 알림 — 성적·피드백·상담 업데이트."},
     {"name": "import", "description": "CSV/Excel 일괄 가져오기 (학생·성적)."},
     {"name": "analytics", "description": "분석 대시보드 — analytics 스키마 집계 캐시 read (담임 한정 RBAC)."},
-    {"name": "chat", "description": "AI 어시스턴트 — 학급 단위 통계 기반 자연어 응답 (k≥5 PII 가드)."},
+    {"name": "chat", "description": "AI 어시스턴트 — 학급 단위 통계 기반 자연어 응답 (PII 마스킹)."},
     {"name": "my", "description": "현재 사용자 본인 관점 조회 (학생/학부모 read-only)."},
     {"name": "health", "description": "운영 헬스체크 — liveness(/health) / readiness(/ready). 무중단 배포 게이트."},
 ]

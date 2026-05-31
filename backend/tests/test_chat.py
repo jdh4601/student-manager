@@ -128,12 +128,13 @@ async def test_chat_resolves_tokens_to_referenced_students(
     assert ref_names == {rows[0]["student_name"], rows[2]["student_name"]}
 
 
-async def test_chat_refuses_when_sample_below_threshold(
+async def test_chat_processes_small_sample(
     auth_client_teacher, seed_teacher
 ):
+    """k≥5 가드 제거: 5명 미만이어도 거부하지 않고 LLM에 마스킹 후 전달한다."""
     rows = _five_students(seed_teacher.school_id)[:3]  # k=3
     repo = _FakeRepo(rows)
-    llm = _FakeLlm(reply="should not be called")
+    llm = _FakeLlm(reply="학생A가 가장 높습니다.")
     _override(repo, llm)
     try:
         resp = await auth_client_teacher.post(
@@ -144,9 +145,14 @@ async def test_chat_refuses_when_sample_below_threshold(
 
     assert resp.status_code == 200
     body = resp.json()
-    assert "5명 미만" in body["reply"]
-    assert body["referenced_students"] == []
-    assert llm.last_user is None  # LLM not called
+    assert body["reply"] == "학생A가 가장 높습니다."
+    assert llm.last_user == "이 반?"  # LLM was called
+    # 원본 식별 정보는 마스킹된다
+    assert llm.last_system is not None
+    for row in rows:
+        assert row["student_name"] not in llm.last_system
+    # 토큰이 실제 학생으로 복원된다
+    assert body["referenced_students"][0]["name"] == rows[0]["student_name"]
 
 
 async def test_chat_resolves_semester_from_ibeon_keyword(

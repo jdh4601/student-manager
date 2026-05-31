@@ -175,7 +175,7 @@ async def test_fetch_student_rows_includes_overall_and_subjects(
         eng = await _seed_subject(db, class_id=class_id, name="영어")
         mat = await _seed_subject(db, class_id=class_id, name="수학")
         students = []
-        for i in range(1, 6):  # 5명 (k≥5 통과)
+        for i in range(1, 6):  # 5명
             sid = await _seed_student(
                 db, school_id=school_id, class_id=class_id,
                 name=f"학생{i}", seq=i,
