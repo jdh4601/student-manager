@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import LoginPage from './pages/LoginPage';
@@ -21,7 +21,6 @@ const GradesPage = lazy(() => import('./pages/GradesPage'));
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage'));
 const CounselingPage = lazy(() => import('./pages/CounselingPage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
-const AnalyticsDashboardPage = lazy(() => import('./pages/AnalyticsDashboardPage'));
 
 function App() {
   return (
@@ -74,7 +73,8 @@ function App() {
               <Suspense fallback={<div className="p-4">불러오는 중...</div>}>
                 <Routes>
                   <Route path="/dashboard" element={<DashboardPage />} />
-                  <Route path="/analytics" element={<AnalyticsDashboardPage />} />
+                  {/* Analytics merged into the dashboard; keep old links working */}
+                  <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/students" element={<StudentListPage />} />
                   <Route path="/students/:studentId" element={<StudentDetailPage />} />
                   <Route path="/grades/:studentId" element={<GradesPage />} />
