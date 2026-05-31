@@ -9,6 +9,42 @@ import ClassCreateModal from '../components/classes/ClassCreateModal';
 import type { ClassSummary } from '../types';
 import { exportStudentsToCSV, exportStudentsToExcel } from '../utils/exportHelpers';
 
+const iconProps = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+};
+
+const PlusIcon = () => (
+  <svg {...iconProps}><path d="M12 5v14M5 12h14" /></svg>
+);
+const TrashIcon = () => (
+  <svg {...iconProps}><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" /></svg>
+);
+const UserPlusIcon = () => (
+  <svg {...iconProps}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M19 8v6M22 11h-6" /></svg>
+);
+const UsersIcon = () => (
+  <svg {...iconProps}><path d="M17 21v-2a4 4 0 0 0-3-3.87M13 3.13a4 4 0 0 1 0 7.75M7 21v-2a4 4 0 0 1 4-4h0a4 4 0 0 1 4 4v2" /><circle cx="9" cy="7" r="4" /></svg>
+);
+const CsvIcon = () => (
+  <svg {...iconProps}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h2M8 17h6" /></svg>
+);
+const ExcelIcon = () => (
+  <svg {...iconProps}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></svg>
+);
+
+const toolbarBtn =
+  'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50';
+const iconBtn =
+  'inline-flex items-center justify-center rounded-md border border-gray-300 bg-white p-1.5 text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50';
+
 export default function StudentListPage() {
   const [classes, setClasses] = useState<ClassSummary[]>([]);
   const [classId, setClassId] = useState<string | undefined>(() => {
@@ -90,10 +126,15 @@ export default function StudentListPage() {
             </div>
           )}
           {classes.length > 0 && (
-            <button className="px-2 py-1 text-sm border rounded" onClick={() => setShowClassCreate(true)}>학급 추가</button>
+            <button className={toolbarBtn} title="학급 추가" aria-label="학급 추가" onClick={() => setShowClassCreate(true)}>
+              <PlusIcon />
+              학급
+            </button>
           )}
           <button
-            className="px-2 py-1 text-sm border rounded text-red-700 border-red-300 disabled:opacity-50 ml-4"
+            className={`${toolbarBtn} border-red-200 text-red-600 hover:bg-red-50`}
+            title="학급 삭제"
+            aria-label="학급 삭제"
             disabled={!effectiveClassId}
             onClick={async () => {
               if (!effectiveClassId) return;
@@ -124,12 +165,15 @@ export default function StudentListPage() {
               }
             }}
           >
-            학급 삭제
+            <TrashIcon />
+            삭제
           </button>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button
-            className="px-3 py-1 rounded text-sm border"
+            className={`${toolbarBtn} border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100`}
+            aria-label="학생 초대"
+            title="학생 초대"
             onClick={() => {
               if (!effectiveClassId) {
                 toast.error('학급을 먼저 선택하세요.');
@@ -138,10 +182,13 @@ export default function StudentListPage() {
               setShowCreateForm(true);
             }}
           >
-            학생 초대
+            <UserPlusIcon />
+            초대
           </button>
           <button
-            className="px-3 py-1 rounded text-sm border"
+            className={toolbarBtn}
+            aria-label="여러 명 초대"
+            title="여러 명 초대"
             onClick={() => {
               // Require a valid class in the current list
               if (!effectiveClassId || !classes.some((c) => c.id === effectiveClassId)) {
@@ -151,25 +198,31 @@ export default function StudentListPage() {
               setShowUploadModal(true);
             }}
           >
-            여러 명 초대
+            <UsersIcon />
+            여러 명
           </button>
+          <div className="mx-1 h-6 w-px self-center bg-gray-300" aria-hidden />
           <button
-            className="px-3 py-1 rounded text-sm border"
+            className={iconBtn}
+            aria-label="CSV로 내보내기"
+            title="CSV로 내보내기"
             disabled={!students || students.length === 0}
             onClick={() => {
               if (students) exportStudentsToCSV(students, currentClassLabel);
             }}
           >
-            CSV로 내보내기
+            <CsvIcon />
           </button>
           <button
-            className="px-3 py-1 rounded text-sm border"
+            className={`${iconBtn} text-green-700 hover:bg-green-50`}
+            aria-label="엑셀로 내보내기"
+            title="엑셀로 내보내기"
             disabled={!students || students.length === 0}
             onClick={async () => {
               if (students) await exportStudentsToExcel(students, currentClassLabel);
             }}
           >
-            엑셀로 내보내기
+            <ExcelIcon />
           </button>
         </div>
       </div>

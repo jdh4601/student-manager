@@ -132,9 +132,9 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
   };
 
   return (
-    <tr className="border-b hover:bg-gray-50">
-      <td className="p-2 border text-center">{s.student_number}</td>
-      <td className="p-2 border text-center">
+    <tr className="odd:bg-white even:bg-gray-50/70 transition-colors hover:bg-blue-50/60">
+      <td className="px-3 py-2.5 text-center text-gray-500">{s.student_number}</td>
+      <td className="px-3 py-2.5 text-center">
         <button
           className="text-blue-600 hover:underline"
           type="button"
@@ -143,8 +143,8 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
           {s.name}
         </button>
       </td>
-      <td className="p-2 border text-center">{genderLabel(detail?.gender)}</td>
-      <td className="p-2 border text-center">
+      <td className="px-3 py-2.5 text-center">{genderLabel(detail?.gender)}</td>
+      <td className="px-3 py-2.5 text-center">
         <select
           className="border rounded px-1 py-0.5 text-sm"
           value={current?.status ?? ''}
@@ -164,7 +164,7 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
           <option value="early_leave">조퇴</option>
         </select>
       </td>
-      <td className="p-2 border">
+      <td className="px-3 py-2.5">
         {latestNote ? (
           <span title={latestNote.content}>
             {latestNote.content.length > 24 ? latestNote.content.slice(0, 24) + '…' : latestNote.content}
@@ -173,7 +173,7 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
           <span className="text-gray-400">-</span>
         )}
       </td>
-      <td className="p-2 border text-center">
+      <td className="px-3 py-2.5 text-center">
         <button
           type="button"
           className={gradePreview ? 'text-blue-600 hover:underline font-medium' : 'px-2 py-1 text-xs border rounded'}
@@ -182,10 +182,10 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
           {gradePreview || '성적 입력'}
         </button>
       </td>
-      <td className="p-2 border text-center">
+      <td className="px-3 py-2.5 text-center">
         {gradeAverage != null ? gradeAverage.toFixed(1) : <span className="text-gray-400">-</span>}
       </td>
-      <td className="p-2 border text-center">
+      <td className="px-3 py-2.5 text-center">
         <div className="flex flex-wrap justify-center gap-1 relative z-0">
           {showSendNow ? (
             <button
@@ -208,7 +208,7 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
           )}
         </div>
       </td>
-      <td className="p-2 border text-center">
+      <td className="px-3 py-2.5 text-center">
         <InvitationStatusBadge status={effectiveInviteStatus} sentAt={s.invite_sent_at ?? null} />
       </td>
     </tr>
@@ -231,28 +231,28 @@ export default function StudentList({ students }: { students: StudentSummary[] }
   const orderedSubjectIds = subjects.map((subject) => subject.id);
 
   return (
-    <>
-      <table className="w-full text-sm border">
-        <thead className="bg-gray-50">
+    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+      <table className="w-full text-sm">
+        <thead className="border-b border-gray-200 bg-gray-100 text-xs font-semibold uppercase tracking-wide text-gray-600">
           <tr>
-            <th className="p-2 border">번호</th>
-            <th className="p-2 border text-center">이름</th>
-            <th className="p-2 border">성별</th>
-            <th className="p-2 border">오늘 출결</th>
-            <th className="p-2 border">특이사항</th>
-            <th className="p-2 border">성적</th>
-            <th className="p-2 border">평균</th>
-            <th className="p-2 border">빠른 액션</th>
-            <th className="p-2 border">초대 상태</th>
+            <th className="px-3 py-3 text-center">번호</th>
+            <th className="px-3 py-3 text-center">이름</th>
+            <th className="px-3 py-3 text-center">성별</th>
+            <th className="px-3 py-3 text-center">오늘 출결</th>
+            <th className="px-3 py-3 text-left">특이사항</th>
+            <th className="px-3 py-3 text-center">성적</th>
+            <th className="px-3 py-3 text-center">평균</th>
+            <th className="px-3 py-3 text-center">빠른 액션</th>
+            <th className="px-3 py-3 text-center">초대 상태</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-gray-100 text-gray-800">
           {sorted.map((s) => (
             <StudentRow key={s.id} s={s} displaySemesterId={displaySemesterId} orderedSubjectIds={orderedSubjectIds} />
           ))}
         </tbody>
       </table>
-    </>
+    </div>
   );
 }
 
