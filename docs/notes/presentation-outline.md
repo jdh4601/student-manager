@@ -16,17 +16,6 @@
 - **솔루션 한 줄**: SaaS형 학생 관리 + 이벤트 기반 실시간 분석 + PII-안전 AI 비서.
 - **규모를 먼저 못박는다**(이후 모든 결정의 근거): 고QPS·대용량 스트리밍 도메인이 *아니다*.
 
-🖼️ **추천 도식 — Before/After 통합도**: 흩어진 4개 도구가 한 SaaS로 수렴하는 그림. "왜 만들었나"를 한 컷에.
-```mermaid
-flowchart LR
-  E["엑셀 · 성적"] --> Pain
-  D["문서 · 피드백"] --> Pain
-  K["카톡 · 알림"] --> Pain
-  P["지필 · 상담"] --> Pain
-  Pain["😵 학생 1명 분석 8~12분<br/>학부모는 학기말까지 접근 불가"]
-  Pain ==통합==> SM["✅ Student Manager<br/>1개 SaaS · 실시간 분석 · PII-안전 AI"]
-```
-
 ---
 
 ## 1. 기술 스택 선택 & 이유 (2분)
@@ -124,26 +113,119 @@ flowchart LR
 
 - **유스케이스**: 교사(성적·상담·피드백·분석) / 학생(본인 조회) / 학부모(자녀 조회) — 3역할.
 - **시퀀스 (핵심 1개)**: 성적 입력 → outbox(같은 TX) → publisher NOTIFY → worker SKIP LOCKED → analytics UPSERT. (인증 시퀀스는 축약)
-- **ERD 핵심**: School → User/Class → Student → Grade/Attendance/Feedback/Counseling. 멀티테넌트는 모든 테이블 `school_id` 격리. (Design Spec §2)
+- **ERD 핵심**: School → User·Class → Student → Grade. Grade는 Subject·Semester·작성자(User)와도 연결되고, 학부모는 ParentStudent 조인 테이블로 학생과 다대다. 멀티테넌트 격리는 `school_id`가 **`users`·`classes` 두 테이블에만** 존재하고, 나머지(Student/Grade/Feedback…)는 FK 체인으로 전이 격리(`Class.school_id = 내 학교`). (Design Spec §2)
 - **용어 정밀화**: User/Student 분리 = 3정규형이 아니라 **역할별 서브타입 분리**(NULL 방지). 삭제 정책은 soft-delete(`is_active`/보존) 기준으로 통일.
 
-🖼️ **추천 도식 1 — ERD 핵심(멀티테넌트 격리)**: School을 루트로 모든 테이블에 `school_id`가 흐르는 구조. 격리 경계를 색/루트로 강조.
+> 가독성을 위해 ERD를 **2장으로 분할** — ① 학사(성적) 핵심, ② 학생 기록·관계자. (실제 SQLAlchemy 모델 `backend/app/models/` 반영)
+
+🖼️ **추천 도식 1 — ERD ① 학사(성적) 핵심**: School을 루트로 user_id(학생 서브타입)·teacher_id(담임) 분기, Grade가 Student·Subject·Semester를 모두 참조하는 구조.
 ```mermaid
 erDiagram
-  School ||--o{ User : "보유"
-  School ||--o{ Class : "보유"
-  Class  ||--o{ Student : "소속"
-  Student ||--o{ Grade : ""
-  Student ||--o{ Attendance : ""
-  Student ||--o{ Feedback : ""
-  Student ||--o{ Counseling : ""
-  School { int id PK }
-  User { int id PK }
-  Class { int id PK }
-  Student { int id PK }
+  SCHOOL   ||--o{ USER     : "school_id"
+  SCHOOL   ||--o{ CLASS    : "school_id"
+  USER     ||--o| STUDENT  : "user_id (학생 계정)"
+  USER     ||--o{ CLASS    : "teacher_id (담임)"
+  CLASS    ||--o{ STUDENT  : "class_id"
+  CLASS    ||--o{ SUBJECT  : "class_id"
+  STUDENT  ||--o{ GRADE    : "student_id"
+  SUBJECT  ||--o{ GRADE    : "subject_id"
+  SEMESTER ||--o{ GRADE    : "semester_id"
+  USER     ||--o{ GRADE    : "created_by"
+
+  SCHOOL {
+    uuid id PK
+    string name
+  }
+  USER {
+    uuid id PK
+    uuid school_id FK
+    string role "teacher/student/parent"
+  }
+  CLASS {
+    uuid id PK
+    uuid school_id FK
+    uuid teacher_id FK
+  }
+  STUDENT {
+    uuid id PK
+    uuid user_id FK
+    uuid class_id FK
+    int student_number
+  }
+  SUBJECT {
+    uuid id PK
+    uuid class_id FK
+    string name
+  }
+  SEMESTER {
+    uuid id PK
+    int year
+    int term
+  }
+  GRADE {
+    uuid id PK
+    uuid student_id FK
+    uuid subject_id FK
+    uuid semester_id FK
+    numeric score
+  }
 ```
 
-🖼️ **추천 도식 2 — 핵심 시퀀스(성적 입력 → 분석 갱신)**: §2 흐름을 시간축으로. "같은 TX"와 "<1초 갱신"이 메시지.
+🖼️ **추천 도식 2 — ERD ② 학생 기록 · 관계자**: Student를 중심으로 출결·피드백·상담·특기사항이 매달리고, 교사(teacher_id)와 학부모(ParentStudent 다대다)가 붙는 구조.
+```mermaid
+erDiagram
+  STUDENT ||--o{ ATTENDANCE     : "student_id"
+  STUDENT ||--o{ FEEDBACK       : "student_id"
+  STUDENT ||--o{ COUNSELING     : "student_id"
+  STUDENT ||--o{ SPECIAL_NOTE   : "student_id"
+  USER    ||--o{ FEEDBACK       : "teacher_id"
+  USER    ||--o{ COUNSELING     : "teacher_id"
+  USER    ||--o{ SPECIAL_NOTE   : "created_by"
+  USER    ||--o{ NOTIFICATION   : "recipient_id"
+  USER    ||--o{ PARENT_STUDENT : "parent_id (학부모)"
+  STUDENT ||--o{ PARENT_STUDENT : "student_id"
+
+  STUDENT {
+    uuid id PK
+    uuid user_id FK
+    uuid class_id FK
+  }
+  USER {
+    uuid id PK
+    string role "teacher/student/parent"
+  }
+  ATTENDANCE {
+    uuid id PK
+    date date
+    string status
+  }
+  FEEDBACK {
+    uuid id PK
+    string category
+    bool is_visible_to_parent
+  }
+  COUNSELING {
+    uuid id PK
+    date date
+    bool is_shared
+  }
+  SPECIAL_NOTE {
+    uuid id PK
+    text content
+  }
+  PARENT_STUDENT {
+    uuid id PK
+    uuid parent_id FK
+    uuid student_id FK
+  }
+  NOTIFICATION {
+    uuid id PK
+    string type
+    bool is_read
+  }
+```
+
+🖼️ **추천 도식 3 — 핵심 시퀀스(성적 입력 → 분석 갱신)**: §2 흐름을 시간축으로. "같은 TX"와 "<1초 갱신"이 메시지.
 ```mermaid
 sequenceDiagram
   participant T as 교사
@@ -213,15 +295,6 @@ flowchart LR
 - **메시지**: "테스트 통과 한 줄"이 아니라 **3계층이 각기 다른 실패를 잡는다** — 단위=로직, 통합=컴포넌트 계약, E2E=사용자 경험.
 - sanitizer·grade_calculator 100% coverage. (`docs/notes/test-pyramid-presentation.md`)
 - **정직성**: frontend 단위테스트는 호스트 환경(Node 25≠vitest 1.6 + Linux node_modules)으로 일시 보류 → **원인 규명+해결책 보유**로 프레이밍. E2E가 frontend를 실 브라우저로 검증.
-
-🖼️ **추천 도식 — 테스트 피라미드(층별로 다른 실패를 잡는다)**: 위 ASCII의 렌더 버전. 너비=양, 라벨=각 층이 잡는 실패 종류.
-```mermaid
-flowchart TB
-  E2E["🔺 E2E · Playwright 11 spec<br/>= 사용자 경험 실패"]
-  INT["🔷 통합 · testcontainers 실 Postgres<br/>= 컴포넌트 계약 실패 (scale=3, 중복 0)"]
-  UNIT["🟦 단위 · 200 passed / 커버리지 81%<br/>= 로직 실패 (계산·권한·격리·sanitizer·OAuth)"]
-  E2E --> INT --> UNIT
-```
 
 ---
 
