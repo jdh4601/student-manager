@@ -74,6 +74,15 @@ export default function DashboardPage() {
     setSubjectId(preferred.id);
   }, [subjectsQuery.data, subjectId]);
 
+  // 학급 학생이 로드되면 학생 상세 분석에 첫 학생(번호순)을 자동 선택한다.
+  useEffect(() => {
+    if (!classId || studentId) return;
+    const list = studentsQuery.data;
+    if (!list || list.length === 0) return;
+    const first = [...list].sort((a, b) => a.student_number - b.student_number)[0];
+    setStudentId(first.id);
+  }, [studentsQuery.data, classId, studentId]);
+
   const filteredStudents = (studentsQuery.data ?? []).filter((s) =>
     studentQuery.trim() === '' ? true : s.name.includes(studentQuery.trim()),
   );
