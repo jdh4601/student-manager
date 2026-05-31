@@ -1,6 +1,6 @@
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -65,11 +65,15 @@ export default function ClassDistributionChart({
       </div>
       <div style={{ width: '100%', height: 240 }}>
         <ResponsiveContainer>
-          <AreaChart data={data.buckets} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
+          <BarChart
+            data={data.buckets}
+            margin={{ top: 8, right: 8, left: -16, bottom: 0 }}
+            barCategoryGap="10%"
+          >
             <defs>
-              <linearGradient id="clayFill" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={CLAY} stopOpacity={0.28} />
-                <stop offset="100%" stopColor={CLAY} stopOpacity={0.02} />
+              <linearGradient id="clayBar" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CLAY} stopOpacity={0.95} />
+                <stop offset="100%" stopColor={CLAY} stopOpacity={0.55} />
               </linearGradient>
             </defs>
             <CartesianGrid stroke="#EBE5DB" vertical={false} />
@@ -88,7 +92,7 @@ export default function ClassDistributionChart({
               tick={{ fill: '#9A9189' }}
             />
             <Tooltip
-              cursor={{ stroke: '#D98E6F', strokeWidth: 1 }}
+              cursor={{ fill: 'rgba(217,142,111,0.12)' }}
               contentStyle={{
                 borderRadius: 12,
                 border: '1px solid #EBE5DB',
@@ -97,17 +101,14 @@ export default function ClassDistributionChart({
               }}
               labelStyle={{ color: '#26211B', fontWeight: 600 }}
             />
-            <Area
-              type="monotone"
+            <Bar
               dataKey="count"
               name="학생 수"
-              stroke={CLAY}
-              strokeWidth={2.5}
-              fill="url(#clayFill)"
-              dot={{ r: 3, fill: CLAY, strokeWidth: 0 }}
-              activeDot={{ r: 5 }}
+              fill="url(#clayBar)"
+              radius={[6, 6, 0, 0]}
+              maxBarSize={48}
             />
-          </AreaChart>
+          </BarChart>
         </ResponsiveContainer>
       </div>
     </div>

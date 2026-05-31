@@ -105,6 +105,34 @@ async def test_distribution_returns_buckets_and_stats(
 
 
 @pytest.mark.asyncio
+async def test_distribution_defaults_to_latest_semester(
+    auth_client_teacher: AsyncClient, seed_teacher, fake_dist_repo: _FakeDistRepo
+):
+    """No semester_id → query the most recent semester, not all semesters.
+
+    Mirrors the teacher-dashboard contract: omitting ``semester_id`` must
+    scope the distribution to ``current_semester_id`` (latest year/term) so a
+    student with grades in several semesters is counted once, in the newest.
+    """
+    cls, sem_2026_1, subj = await _bootstrap(seed_teacher, seed_teacher.school_id)
+    async with async_session_test() as session:
+        older = Semester(year=2025, term=1)
+        latest = Semester(year=2026, term=2)
+        session.add_all([older, latest])
+        await session.commit()
+        await session.refresh(latest)
+        latest_id = latest.id
+
+    res = await auth_client_teacher.get(
+        f"/api/v1/analytics/classes/{cls.id.hex}/distribution",
+        params={"subject_id": subj.id.hex},  # semester_id intentionally omitted
+    )
+    assert res.status_code == 200, res.text
+    # The repo must be scoped to the latest semester — never None (all semesters).
+    assert fake_dist_repo.calls[-1][2] == latest_id
+
+
+@pytest.mark.asyncio
 async def test_distribution_empty_data(
     auth_client_teacher: AsyncClient, seed_teacher, fake_dist_repo: _FakeDistRepo
 ):
