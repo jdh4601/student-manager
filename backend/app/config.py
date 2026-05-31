@@ -1,5 +1,7 @@
+from typing import Annotated
+
 from pydantic import field_validator
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class Settings(BaseSettings):
@@ -68,8 +70,10 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str = "http://localhost:5173/auth/oauth/google/callback"
-    # edu 도메인 화이트리스트 — 이 도메인 이메일만 교사 권한 부여. CSV 또는 JSON 허용.
-    allowed_teacher_domains: list[str] = []
+    # edu 도메인 화이트리스트 — 이 도메인 이메일만 교사 권한 부여. CSV로 주입.
+    # NoDecode: pydantic-settings의 기본 JSON 디코딩을 끄고 split_domains(CSV)가 처리하게 함.
+    # (없으면 "inu.ac.kr" 같은 CSV가 JSON 파싱 실패로 SettingsError를 일으킴)
+    allowed_teacher_domains: Annotated[list[str], NoDecode] = []
     # 신규 OAuth 교사가 배정될 학교 (데모용). 운영에선 School.domain 매핑으로 대체.
     oauth_default_school_id: str | None = None
 

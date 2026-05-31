@@ -328,7 +328,7 @@ Response 503: { "code": "AUTH_OAUTH_NOT_CONFIGURED",    "detail": "OAuth가 구�
 Authorization: None
 처리 순서: state↔쿠키 compare_digest → code→token→userinfo → email_verified 가드
           → 도메인 화이트리스트 게이트 → 기존 교사 로그인 / 신규 교사 생성(oauth_default_school_id)
-환경변수: OAUTH_PROVIDER(auto|stub|google), GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI,
+환경변수: OAUTH_PROVIDER(auto|real|stub), GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI,
           ALLOWED_TEACHER_DOMAINS(CSV), OAUTH_DEFAULT_SCHOOL_ID, ALLOW_OAUTH_STUB, ENVIRONMENT
 ```
 
