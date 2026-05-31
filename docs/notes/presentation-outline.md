@@ -6,7 +6,7 @@
 
 > 깊은 근거는 `docs/architecture.md`(v1.3)·`docs/design-spec.md`(v2.3)·`docs/decisions/002·003`을 Q&A 백업으로 둔다.
 
-**발표 순서**: ①기술스택 → ②아키텍처+확장성 → ③API/Swagger → ④UML/ERD → ⑤인증 → ⑥테스트 → ⑦배포/CICD → ⑧문제와 해결(Kafka→NOTIFY) → ⑨데모
+**발표 순서**: ①기술스택 → ②아키텍처+확장성 → ③API/Swagger → ④UML/ERD → ⑤인증 → ⑦배포/CICD → ⑧문제와 해결(Kafka→NOTIFY) → ⑨데모
 
 ---
 
@@ -280,21 +280,6 @@ flowchart LR
   RT --> SVC["③ 서비스 row-scope<br/>Class.teacher_id = 나"]
   SVC --> DB[("스코프된 쿼리")]
 ```
-
----
-
-## 6. 테스트 (1.5분)
-
-```
-        ╱╲        E2E  : Playwright 11 spec (실 브라우저 사용자 플로우)
-       ╱──╲       통합 : testcontainers 실 Postgres (outbox→analytics 정합성, scale=3 중복 0)
-      ╱────╲      단위 : 200 passed / 백엔드 커버리지 81% (계산·권한·격리·sanitizer·OAuth 게이트)
-     ╱──────╲
-```
-
-- **메시지**: "테스트 통과 한 줄"이 아니라 **3계층이 각기 다른 실패를 잡는다** — 단위=로직, 통합=컴포넌트 계약, E2E=사용자 경험.
-- sanitizer·grade_calculator 100% coverage. (`docs/notes/test-pyramid-presentation.md`)
-- **정직성**: frontend 단위테스트는 호스트 환경(Node 25≠vitest 1.6 + Linux node_modules)으로 일시 보류 → **원인 규명+해결책 보유**로 프레이밍. E2E가 frontend를 실 브라우저로 검증.
 
 ---
 
