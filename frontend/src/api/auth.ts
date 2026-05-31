@@ -45,9 +45,9 @@ export async function oauthGoogleLogin(): Promise<{ authorize_url: string }> {
   return data;
 }
 
-export async function oauthGoogleCallback(code: string): Promise<TokenResponse> {
+export async function oauthGoogleCallback(code: string, state: string): Promise<TokenResponse> {
   const { data } = await apiClient.get<TokenResponse>('/auth/oauth/google/callback', {
-    params: { code },
+    params: { code, state },
   });
   return data;
 }

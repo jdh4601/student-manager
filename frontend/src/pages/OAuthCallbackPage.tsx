@@ -19,15 +19,17 @@ export default function OAuthCallbackPage() {
     if (ran.current) return; // StrictMode 이중 실행 방지
     ran.current = true;
 
-    const code = new URLSearchParams(window.location.search).get('code');
-    if (!code) {
-      setError('인증 코드가 없습니다.');
+    const qs = new URLSearchParams(window.location.search);
+    const code = qs.get('code');
+    const state = qs.get('state');
+    if (!code || !state) {
+      setError('인증 코드 또는 state가 없습니다.');
       return;
     }
 
     (async () => {
       try {
-        const tok = await oauthGoogleCallback(code);
+        const tok = await oauthGoogleCallback(code, state);
         setAccessToken(tok.access_token);
         setUser(await getMe());
         navigate('/', { replace: true });

@@ -4,6 +4,8 @@
 보안 핵심: edu 도메인 화이트리스트 게이팅 + 이메일 충돌 시 중복 생성 금지.
 """
 
+from urllib.parse import parse_qs, urlparse
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import func, select
@@ -12,6 +14,14 @@ from app.config import settings
 from app.models import School, User
 from app.utils.security import hash_password
 from tests.conftest import async_session_test
+
+
+async def _begin_oauth(client: AsyncClient) -> str:
+    """login 호출로 oauth_state 쿠키를 심고, authorize_url의 state를 반환."""
+    res = await client.get("/api/v1/auth/oauth/google/login")
+    assert res.status_code == 200
+    url = res.json()["authorize_url"]
+    return parse_qs(urlparse(url).query)["state"][0]
 
 
 @pytest.fixture(autouse=True)
@@ -32,9 +42,10 @@ async def test_login_endpoint_returns_authorize_url(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_allowed_domain_creates_teacher(client: AsyncClient):
+    state = await _begin_oauth(client)
     res = await client.get(
         "/api/v1/auth/oauth/google/callback",
-        params={"code": "newteacher@allowed.edu"},
+        params={"code": "newteacher@allowed.edu", "state": state},
     )
     assert res.status_code == 200, res.text
     body = res.json()
@@ -50,10 +61,33 @@ async def test_allowed_domain_creates_teacher(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_disallowed_domain_rejected(client: AsyncClient):
+async def test_callback_rejects_state_mismatch(client: AsyncClient):
+    await _begin_oauth(client)  # 쿠키는 심되, 다른 state를 보냄
     res = await client.get(
         "/api/v1/auth/oauth/google/callback",
-        params={"code": "someone@gmail.com"},
+        params={"code": "newteacher@allowed.edu", "state": "forged-state"},
+    )
+    assert res.status_code == 400
+    assert res.json()["code"] == "AUTH_OAUTH_STATE_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_callback_rejects_missing_state(client: AsyncClient):
+    await _begin_oauth(client)
+    res = await client.get(
+        "/api/v1/auth/oauth/google/callback",
+        params={"code": "newteacher@allowed.edu"},  # state 누락
+    )
+    assert res.status_code == 400
+    assert res.json()["code"] == "AUTH_OAUTH_STATE_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_disallowed_domain_rejected(client: AsyncClient):
+    state = await _begin_oauth(client)
+    res = await client.get(
+        "/api/v1/auth/oauth/google/callback",
+        params={"code": "someone@gmail.com", "state": state},
     )
     assert res.status_code == 403
     assert res.json()["code"] == "AUTH_OAUTH_DOMAIN_NOT_ALLOWED"
@@ -80,9 +114,10 @@ async def test_existing_email_logs_in_without_duplicate(client: AsyncClient, see
         await session.commit()
         existing_id = str(existing.id)
 
+    state = await _begin_oauth(client)
     res = await client.get(
         "/api/v1/auth/oauth/google/callback",
-        params={"code": "known@test.com"},
+        params={"code": "known@test.com", "state": state},
     )
     assert res.status_code == 200, res.text
     assert res.json()["user_id"] == existing_id
