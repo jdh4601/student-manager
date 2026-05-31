@@ -71,10 +71,7 @@ export default function Sidebar({ onToggle }: { onToggle?: () => void }) {
   return (
     <aside className="flex h-full w-full flex-col px-3 py-5">
       <div className="mb-5 flex items-center justify-between px-3">
-        <div className="flex items-center gap-2 select-none">
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-clay text-sm font-bold text-white">
-            C
-          </span>
+        <div className="flex items-center select-none">
           <span className="text-[17px] font-bold tracking-tight text-ink">ClassFlow</span>
         </div>
         <button

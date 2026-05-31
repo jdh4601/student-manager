@@ -133,10 +133,7 @@ export default function LandingPage() {
     <div className="min-h-screen bg-canvas text-ink font-sans selection:bg-clay-wash selection:text-clay-ink overflow-x-hidden">
       {/* Navigation */}
       <header className="px-6 py-4 flex items-center justify-between max-w-6xl mx-auto w-full sticky top-0 bg-canvas/80 backdrop-blur-md z-50">
-        <div className="flex items-center gap-2 select-none">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-clay text-base font-bold text-white">
-            C
-          </span>
+        <div className="flex items-center select-none">
           <span className="font-bold tracking-tight text-xl text-ink">ClassFlow</span>
         </div>
         <div className="flex items-center gap-3">
