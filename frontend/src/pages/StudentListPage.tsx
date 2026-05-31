@@ -8,6 +8,8 @@ import StudentCreateForm from '../components/students/StudentCreateForm';
 import ClassCreateModal from '../components/classes/ClassCreateModal';
 import type { ClassSummary } from '../types';
 import { exportStudentsToCSV, exportStudentsToExcel } from '../utils/exportHelpers';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
 
 const iconProps = {
   width: 16,
@@ -39,11 +41,6 @@ const CsvIcon = () => (
 const ExcelIcon = () => (
   <svg {...iconProps}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></svg>
 );
-
-const toolbarBtn =
-  'inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-sm text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50';
-const iconBtn =
-  'inline-flex items-center justify-center rounded-md border border-gray-300 bg-white p-1.5 text-gray-600 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50';
 
 export default function StudentListPage() {
   const [classes, setClasses] = useState<ClassSummary[]>([]);
@@ -108,31 +105,35 @@ export default function StudentListPage() {
   }, []);
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">학생 목록</h1>
+    <div className="space-y-6">
+      <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">학생 목록</h1>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2 items-center">
-          <label className="text-sm text-gray-600">학급 선택</label>
+          <label className="text-sm font-medium text-ink-soft">학급 선택</label>
           {classes.length > 0 ? (
-            <select className="border p-1" value={effectiveClassId || ''} onChange={(e) => { setClassId(e.target.value); try { localStorage.setItem('selectedClassId', e.target.value); } catch {} }}>
+            <select
+              className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-clay-soft focus:outline-none focus:ring-2 focus:ring-clay-wash"
+              value={effectiveClassId || ''}
+              onChange={(e) => { setClassId(e.target.value); try { localStorage.setItem('selectedClassId', e.target.value); } catch {} }}
+            >
               {classes.map((c) => (
                 <option key={c.id} value={c.id}>{`${c.year}학년도 ${c.grade}학년 ${c.name}`}</option>
               ))}
             </select>
           ) : (
             <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500">학급이 없습니다.</span>
-              <button className="px-2 py-1 text-sm border rounded" onClick={() => setShowClassCreate(true)}>학급 만들기</button>
+              <span className="text-sm text-muted">학급이 없습니다.</span>
+              <Button variant="ghost" onClick={() => setShowClassCreate(true)}>학급 만들기</Button>
             </div>
           )}
           {classes.length > 0 && (
-            <button className={toolbarBtn} title="학급 추가" aria-label="학급 추가" onClick={() => setShowClassCreate(true)}>
-              <PlusIcon />
+            <Button variant="ghost" icon={<PlusIcon />} title="학급 추가" aria-label="학급 추가" onClick={() => setShowClassCreate(true)}>
               학급
-            </button>
+            </Button>
           )}
-          <button
-            className={`${toolbarBtn} border-red-200 text-red-600 hover:bg-red-50`}
+          <Button
+            variant="danger"
+            icon={<TrashIcon />}
             title="학급 삭제"
             aria-label="학급 삭제"
             disabled={!effectiveClassId}
@@ -165,13 +166,13 @@ export default function StudentListPage() {
               }
             }}
           >
-            <TrashIcon />
             삭제
-          </button>
+          </Button>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            className={`${toolbarBtn} border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100`}
+          <Button
+            variant="primary"
+            icon={<UserPlusIcon />}
             aria-label="학생 초대"
             title="학생 초대"
             onClick={() => {
@@ -182,11 +183,11 @@ export default function StudentListPage() {
               setShowCreateForm(true);
             }}
           >
-            <UserPlusIcon />
             초대
-          </button>
-          <button
-            className={toolbarBtn}
+          </Button>
+          <Button
+            variant="ghost"
+            icon={<UsersIcon />}
             aria-label="여러 명 초대"
             title="여러 명 초대"
             onClick={() => {
@@ -198,50 +199,48 @@ export default function StudentListPage() {
               setShowUploadModal(true);
             }}
           >
-            <UsersIcon />
             여러 명
-          </button>
-          <div className="mx-1 h-6 w-px self-center bg-gray-300" aria-hidden />
-          <button
-            className={iconBtn}
+          </Button>
+          <div className="mx-1 h-6 w-px self-center bg-line" aria-hidden />
+          <Button
+            variant="ghost"
+            icon={<CsvIcon />}
             aria-label="CSV로 내보내기"
             title="CSV로 내보내기"
             disabled={!students || students.length === 0}
             onClick={() => {
               if (students) exportStudentsToCSV(students, currentClassLabel);
             }}
-          >
-            <CsvIcon />
-          </button>
-          <button
-            className={`${iconBtn} text-green-700 hover:bg-green-50`}
+          />
+          <Button
+            variant="ghost"
+            icon={<ExcelIcon />}
+            className="text-positive"
             aria-label="엑셀로 내보내기"
             title="엑셀로 내보내기"
             disabled={!students || students.length === 0}
             onClick={async () => {
               if (students) await exportStudentsToExcel(students, currentClassLabel);
             }}
-          >
-            <ExcelIcon />
-          </button>
+          />
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-4 rounded border bg-white p-3">
-        <label className="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" checked={showPendingOnly} onChange={(e) => setShowPendingOnly(e.target.checked)} aria-label="대기만 보기" />
+      <Card flush className="flex flex-wrap items-center gap-4 p-4">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" className="h-4 w-4 accent-clay" checked={showPendingOnly} onChange={(e) => setShowPendingOnly(e.target.checked)} aria-label="대기만 보기" />
           대기만 보기
         </label>
-        <label className="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" checked={showExpiringSoonOnly} onChange={(e) => setShowExpiringSoonOnly(e.target.checked)} aria-label="7일 내 만료 예정" />
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" className="h-4 w-4 accent-clay" checked={showExpiringSoonOnly} onChange={(e) => setShowExpiringSoonOnly(e.target.checked)} aria-label="7일 내 만료 예정" />
           7일 내 만료 예정
         </label>
-      </div>
+      </Card>
       {isLoading ? (
-        <div>불러오는 중...</div>
+        <Card className="text-sm text-ink-soft">불러오는 중...</Card>
       ) : students ? (
         <StudentList students={filteredStudents} />
       ) : (
-        <div>학생이 없습니다.</div>
+        <Card className="text-sm text-ink-soft">학생이 없습니다.</Card>
       )}
       {showUploadModal && effectiveClassId && (
         <BulkInviteModal classId={effectiveClassId} onClose={() => setShowUploadModal(false)} />

@@ -132,11 +132,11 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
   };
 
   return (
-    <tr className="odd:bg-white even:bg-gray-50/70 transition-colors hover:bg-blue-50/60">
-      <td className="px-3 py-2.5 text-center text-gray-500">{s.student_number}</td>
+    <tr className="even:bg-surface-soft/40 transition-colors hover:bg-clay-wash/40">
+      <td className="px-3 py-2.5 text-center text-muted">{s.student_number}</td>
       <td className="px-3 py-2.5 text-center">
         <button
-          className="text-blue-600 hover:underline"
+          className="text-clay-ink hover:underline"
           type="button"
           onClick={() => navigate(`/students/${s.id}`)}
         >
@@ -146,7 +146,7 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
       <td className="px-3 py-2.5 text-center">{genderLabel(detail?.gender)}</td>
       <td className="px-3 py-2.5 text-center">
         <select
-          className="border rounded px-1 py-0.5 text-sm"
+          className="rounded-lg border border-line bg-surface px-2 py-1 text-sm text-ink focus:border-clay-soft focus:outline-none"
           value={current?.status ?? ''}
           onChange={(e) => {
             const val = e.target.value as AttendanceType['status'] | '';
@@ -170,20 +170,20 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
             {latestNote.content.length > 24 ? latestNote.content.slice(0, 24) + '…' : latestNote.content}
           </span>
         ) : (
-          <span className="text-gray-400">-</span>
+          <span className="text-muted">-</span>
         )}
       </td>
       <td className="px-3 py-2.5 text-center">
         <button
           type="button"
-          className={gradePreview ? 'text-blue-600 hover:underline font-medium' : 'px-2 py-1 text-xs border rounded'}
+          className={gradePreview ? 'text-clay-ink hover:underline font-medium' : 'rounded-lg border border-line px-2 py-1 text-xs text-ink-soft hover:bg-surface-soft'}
           onClick={() => navigate(`/grades/${s.id}`)}
         >
           {gradePreview || '성적 입력'}
         </button>
       </td>
       <td className="px-3 py-2.5 text-center">
-        {gradeAverage != null ? gradeAverage.toFixed(1) : <span className="text-gray-400">-</span>}
+        {gradeAverage != null ? gradeAverage.toFixed(1) : <span className="text-muted">-</span>}
       </td>
       <td className="px-3 py-2.5 text-center">
         <div className="flex flex-wrap justify-center gap-1 relative z-0">
@@ -198,10 +198,10 @@ function StudentRow({ s, displaySemesterId, orderedSubjectIds }: { s: StudentSum
             </button>
           ) : (
             <>
-              <button type="button" className="rounded border px-2 py-1 text-xs relative z-10 disabled:opacity-50 disabled:bg-gray-100 disabled:cursor-not-allowed hover:bg-gray-50" disabled={disableInviteActions || isResending} onClick={() => void handleResend(false)}>
+              <button type="button" className="rounded-lg border border-line bg-surface px-2 py-1 text-xs text-ink relative z-10 disabled:opacity-50 disabled:bg-surface-soft disabled:cursor-not-allowed hover:bg-surface-soft" disabled={disableInviteActions || isResending} onClick={() => void handleResend(false)}>
                 재전송
               </button>
-              <button type="button" className="rounded border px-2 py-1 text-xs relative z-10 disabled:opacity-50 disabled:bg-gray-100 disabled:cursor-not-allowed hover:bg-gray-50" disabled={disableInviteActions || isResending} onClick={() => void handleResend(true)}>
+              <button type="button" className="rounded-lg border border-line bg-surface px-2 py-1 text-xs text-ink relative z-10 disabled:opacity-50 disabled:bg-surface-soft disabled:cursor-not-allowed hover:bg-surface-soft" disabled={disableInviteActions || isResending} onClick={() => void handleResend(true)}>
                 링크 복사
               </button>
             </>
@@ -231,9 +231,9 @@ export default function StudentList({ students }: { students: StudentSummary[] }
   const orderedSubjectIds = subjects.map((subject) => subject.id);
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+    <div className="overflow-x-auto rounded-2xl border border-line bg-surface shadow-card">
       <table className="w-full text-sm">
-        <thead className="border-b border-gray-200 bg-gray-100 text-xs font-semibold uppercase tracking-wide text-gray-600">
+        <thead className="border-b border-line bg-surface-soft text-xs font-semibold uppercase tracking-wide text-muted">
           <tr>
             <th className="px-3 py-3 text-center">번호</th>
             <th className="px-3 py-3 text-center">이름</th>
@@ -246,7 +246,7 @@ export default function StudentList({ students }: { students: StudentSummary[] }
             <th className="px-3 py-3 text-center">초대 상태</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100 text-gray-800">
+        <tbody className="divide-y divide-line text-ink">
           {sorted.map((s) => (
             <StudentRow key={s.id} s={s} displaySemesterId={displaySemesterId} orderedSubjectIds={orderedSubjectIds} />
           ))}

@@ -13,6 +13,13 @@ import ClassSelector from '../components/classes/ClassSelector';
 import type { Counseling } from '../types';
 import CounselingDetailModal from '../components/counselings/CounselingDetailModal';
 import { useAuthStore } from '../stores/authStore';
+import { Card, CardHeader } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+
+const fieldClass =
+  'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-clay-soft focus:outline-none focus:ring-2 focus:ring-clay-wash';
+const labelClass = 'text-sm font-medium text-ink-soft';
 
 interface CounselingFormState {
   student_id: string;
@@ -127,167 +134,169 @@ export default function CounselingPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">상담 기록</h1>
-        <button
-          onClick={() => setShowForm((v) => !v)}
-          className="px-3 py-1 bg-indigo-600 text-white rounded text-sm"
-        >
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">상담 기록</h1>
+          <p className="mt-1 text-sm text-ink-soft">학생 상담 내역을 기록하고 검색하세요.</p>
+        </div>
+        <Button variant="primary" size="md" onClick={() => setShowForm((v) => !v)}>
           {showForm ? '닫기' : '+ 상담 기록 추가'}
-        </button>
+        </Button>
       </div>
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="border rounded p-4 space-y-3 bg-gray-50">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm text-gray-600">학급</label>
-              <ClassSelector
-                value={classId}
-                onChange={(id) => {
-                  setClassId(id);
-                  if (id) try { localStorage.setItem('selectedClassId', id); } catch {}
-                  setForm((prev) => ({ ...prev, student_id: '' }));
-                }}
-                disabled={!!editingId}
+        <Card>
+          <CardHeader title={editingId ? '상담 기록 수정' : '상담 기록 추가'} />
+          <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="space-y-1">
+                <label className={labelClass}>학급</label>
+                <ClassSelector
+                  value={classId}
+                  onChange={(id) => {
+                    setClassId(id);
+                    if (id) try { localStorage.setItem('selectedClassId', id); } catch {}
+                    setForm((prev) => ({ ...prev, student_id: '' }));
+                  }}
+                  disabled={!!editingId}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>학생</label>
+                <StudentSelector
+                  value={form.student_id}
+                  onChange={(id) => setForm({ ...form, student_id: id })}
+                  classId={classId || undefined}
+                  disabled={!!editingId || !classId}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>상담 날짜</label>
+                <input
+                  type="date"
+                  className={fieldClass}
+                  value={form.date}
+                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className={labelClass}>상담 내용</label>
+              <textarea
+                className={`${fieldClass} h-24`}
+                value={form.content}
+                onChange={(e) => setForm({ ...form, content: e.target.value })}
                 required
               />
             </div>
-            <div>
-              <label className="text-sm text-gray-600">학생</label>
-              <StudentSelector
-                value={form.student_id}
-                onChange={(id) => setForm({ ...form, student_id: id })}
-                classId={classId || undefined}
-                disabled={!!editingId || !classId}
-                required
+            <div className="space-y-1">
+              <label className={labelClass}>다음 상담 계획</label>
+              <textarea
+                className={`${fieldClass} h-16`}
+                value={form.next_plan}
+                onChange={(e) => setForm({ ...form, next_plan: e.target.value })}
               />
             </div>
-            <div>
-              <label className="text-sm text-gray-600">상담 날짜</label>
+            <label className="flex items-center gap-2 text-sm text-ink">
               <input
-                type="date"
-                className="border w-full p-1 text-sm"
-                value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-                required
+                type="checkbox"
+                className="h-4 w-4 accent-clay"
+                checked={form.is_shared}
+                onChange={(e) => setForm({ ...form, is_shared: e.target.checked })}
               />
+              교사 간 공유
+            </label>
+            <div className="flex gap-2">
+              <Button type="submit" variant="primary">
+                {editingId ? '수정' : '저장'}
+              </Button>
+              <Button type="button" variant="ghost" onClick={resetForm}>
+                취소
+              </Button>
             </div>
-          </div>
-          <div>
-            <label className="text-sm text-gray-600">상담 내용</label>
-            <textarea
-              className="border w-full p-1 text-sm h-24"
-              value={form.content}
-              onChange={(e) => setForm({ ...form, content: e.target.value })}
-              required
-            />
-          </div>
-          <div>
-            <label className="text-sm text-gray-600">다음 상담 계획</label>
-            <textarea
-              className="border w-full p-1 text-sm h-16"
-              value={form.next_plan}
-              onChange={(e) => setForm({ ...form, next_plan: e.target.value })}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.is_shared}
-              onChange={(e) => setForm({ ...form, is_shared: e.target.checked })}
-            />
-            교사 간 공유
-          </label>
-          <div className="flex gap-2">
-            <button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded text-sm">
-              {editingId ? '수정' : '저장'}
-            </button>
-            <button
-              type="button"
-              onClick={resetForm}
-              className="px-3 py-1 bg-gray-300 rounded text-sm"
-            >
-              취소
-            </button>
-          </div>
-        </form>
+          </form>
+        </Card>
       )}
 
       {/* 필터/리스트: 작성 중에는 숨김 */}
       {!showForm && (
       <>
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-5 md:items-end">
-        <div>
-          <label className="text-sm text-gray-600" htmlFor="counseling-class-filter">학급 필터</label>
-          <ClassSelector
-            value={filterClassId}
-            onChange={(id) => {
-              setFilterClassId(id);
-            }}
-          />
+      <Card>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-5 md:items-end">
+          <div className="space-y-1">
+            <label className={labelClass} htmlFor="counseling-class-filter">학급 필터</label>
+            <ClassSelector
+              value={filterClassId}
+              onChange={(id) => {
+                setFilterClassId(id);
+              }}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className={labelClass} htmlFor="counseling-student-search">학생 이름 검색</label>
+            <input
+              id="counseling-student-search"
+              type="text"
+              placeholder="이름으로 검색"
+              className={fieldClass}
+              value={studentSearch}
+              onChange={(e) => setStudentSearch(e.target.value)}
+              disabled={!!linkedStudentId}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className={labelClass} htmlFor="counseling-teacher-search">작성 교사</label>
+            <input
+              id="counseling-teacher-search"
+              type="text"
+              placeholder="교사 이름"
+              className={fieldClass}
+              value={teacherSearch}
+              onChange={(e) => setTeacherSearch(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className={labelClass} htmlFor="counseling-start-date">시작일</label>
+            <input
+              id="counseling-start-date"
+              type="date"
+              className={fieldClass}
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1">
+            <label className={labelClass} htmlFor="counseling-end-date">종료일</label>
+            <input
+              id="counseling-end-date"
+              type="date"
+              className={fieldClass}
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+            />
+          </div>
+          {(filterClassId || studentSearch || teacherSearch || startDate || endDate) && (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => { setFilterClassId(''); setStudentSearch(''); setTeacherSearch(''); setStartDate(''); setEndDate(''); }}
+            >
+              필터 초기화
+            </Button>
+          )}
         </div>
-        <div className="flex-1">
-          <label className="text-sm text-gray-600" htmlFor="counseling-student-search">학생 이름 검색</label>
-          <input
-            id="counseling-student-search"
-            type="text"
-            placeholder="이름으로 검색"
-            className="border w-full p-1 text-sm"
-            value={studentSearch}
-            onChange={(e) => setStudentSearch(e.target.value)}
-            disabled={!!linkedStudentId}
-          />
-        </div>
-        <div>
-          <label className="text-sm text-gray-600" htmlFor="counseling-teacher-search">작성 교사</label>
-          <input
-            id="counseling-teacher-search"
-            type="text"
-            placeholder="교사 이름"
-            className="border w-full p-1 text-sm"
-            value={teacherSearch}
-            onChange={(e) => setTeacherSearch(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="text-sm text-gray-600" htmlFor="counseling-start-date">시작일</label>
-          <input
-            id="counseling-start-date"
-            type="date"
-            className="border w-full p-1 text-sm"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className="text-sm text-gray-600" htmlFor="counseling-end-date">종료일</label>
-          <input
-            id="counseling-end-date"
-            type="date"
-            className="border w-full p-1 text-sm"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-          />
-        </div>
-        {(filterClassId || studentSearch || teacherSearch || startDate || endDate) && (
-          <button
-            type="button"
-            className="px-2 py-1 text-xs border rounded text-gray-600"
-            onClick={() => { setFilterClassId(''); setStudentSearch(''); setTeacherSearch(''); setStartDate(''); setEndDate(''); }}
-          >
-            필터 초기화
-          </button>
-        )}
-      </div>
+      </Card>
 
       {isLoading ? (
-        <div>불러오는 중...</div>
+        <Card className="text-sm text-ink-soft">불러오는 중...</Card>
       ) : (counselings ?? []).length === 0 ? (
-        <div className="text-gray-500 text-sm">상담 기록이 없습니다.</div>
+        <Card className="text-sm text-ink-soft">상담 기록이 없습니다.</Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {(() => {
             let list = counselings ?? [];
             // 1) Class filter narrows by students of the class
@@ -297,28 +306,24 @@ export default function CounselingPage() {
             }
             return list;
           })().map((cs) => (
-            <div
+            <Card
               key={cs.id}
-              className="border rounded p-3 space-y-1 hover:bg-gray-50 cursor-pointer"
+              className="cursor-pointer space-y-1 transition-shadow hover:shadow-card-hover"
               onClick={() => setSelectedCounselingId(cs.id)}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{cs.student_name ?? getStudentName(cs.student_id)}</span>
-                  <span className="text-xs text-gray-500">{cs.date}</span>
-                  <span className="text-xs text-gray-500">작성: {cs.teacher_name ?? '알 수 없음'}</span>
+                  <span className="text-sm font-semibold text-ink">{cs.student_name ?? getStudentName(cs.student_id)}</span>
+                  <span className="text-xs text-muted">{cs.date}</span>
+                  <span className="text-xs text-muted">작성: {cs.teacher_name ?? '알 수 없음'}</span>
                 </div>
-                {cs.is_shared && (
-                  <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
-                    공유됨
-                  </span>
-                )}
+                {cs.is_shared && <Badge variant="positive">공유됨</Badge>}
               </div>
-              <p className="text-sm">{cs.content}</p>
+              <p className="text-sm text-ink">{cs.content}</p>
               {cs.next_plan && (
-                <p className="text-xs text-gray-500">다음 계획: {cs.next_plan}</p>
+                <p className="text-xs text-ink-soft">다음 계획: {cs.next_plan}</p>
               )}
-            </div>
+            </Card>
           ))}
         </div>
       )}

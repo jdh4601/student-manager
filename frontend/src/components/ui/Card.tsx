@@ -1,18 +1,19 @@
-import type { ReactNode } from 'react';
+import type { HTMLAttributes, ReactNode } from 'react';
 
-interface CardProps {
+interface CardProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   className?: string;
   /** Disable default inner padding (e.g. when the card holds a flush table). */
   flush?: boolean;
 }
 
-export function Card({ children, className = '', flush = false }: CardProps) {
+export function Card({ children, className = '', flush = false, ...rest }: CardProps) {
   return (
     <div
       className={`rounded-2xl border border-line bg-surface shadow-card ${
         flush ? '' : 'p-5 sm:p-6'
       } ${className}`}
+      {...rest}
     >
       {children}
     </div>
