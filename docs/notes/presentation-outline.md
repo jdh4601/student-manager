@@ -1,228 +1,166 @@
-# 발표 아웃라인 — Student Manager v2.2
+# 발표 아웃라인 — Student Manager
 
-**연관**: SMS-71 / Architecture v1.3 / ADR-002·003 / Phase 8
+**연관**: Architecture v1.3 / Design Spec v2.3 / ADR-002·003
 **구성**: 발표 15분 + 라이브 시연 10분
-**발표 관점**: "기술 스택·아키텍처를 *왜* 이렇게 선택했는가"가 중심. 모든 결정은 하나의 메시지로 수렴 →
-**도메인 규모(학교당 500명·성적 30k row, 분석은 학급 30명 단위)에 맞춘 right-sizing.**
+**관통 메시지**: 좋은 설계는 *최신* 기술이 아니라 **문제 규모에 맞는** 기술을 고르는 것 — 도메인 규모(학교당 ~500명·성적 ~30k row, 분석은 학급 30명 단위)에 맞춘 **right-sizing**.
 
-> 깊은 근거는 `docs/architecture.md`(v1.3), `docs/decisions/002·003`을 Q&A 백업으로 둔다.
+> 깊은 근거는 `docs/architecture.md`(v1.3)·`docs/design-spec.md`(v2.3)·`docs/decisions/002·003`을 Q&A 백업으로 둔다.
 
-> **발표 보완 5종(커리큘럼 축 정렬)은 §12에 모음**: ① OpenAPI/Swagger · ② 테스트 피라미드 · ③ 무중단 배포 · ④ Agile/Jira · ⑤ 교사 OAuth. 본 아웃라인 본문(§1~11)은 "왜 이 아키텍처인가"를, §12는 "수업 커리큘럼 축을 어떻게 충족했는가"를 다룬다.
-
----
-
-## 0. 한 줄 메시지 (thesis)
-
-> 좋은 설계는 *최신* 기술이 아니라 **문제 규모에 맞는** 기술을 고르는 것.
-> 우리는 Kafka로 결정해 구현까지 끝낸 뒤, 도메인 규모를 재평가해 Postgres LISTEN/NOTIFY로 **되돌렸고**(ADR-002 → 003),
-> 그 판단이 배포(브로커·secret·비용 제거)까지 단순하게 만들었다.
-
-발표 차별점: 대부분 "X를 골랐고 좋다"고 말한다. 우리는 **"결정 → 구현 → 재평가 → 번복"을 ADR로 문서화한 과정** 자체를 보여준다. (소프트웨어 설계 수업이 평가하는 건 최신 기술이 아니라 *판단 근거와 트레이드오프 이해*다.)
+**발표 순서**: ①기술스택 → ②아키텍처+확장성 → ③API/Swagger → ④UML/ERD → ⑤인증 → ⑥테스트 → ⑦배포/CICD → ⑧문제와 해결(Kafka→NOTIFY) → ⑨데모
 
 ---
 
-## 1. 문제 (2분)
+## 0. 도입 (30초)
 
-- 한국 학교 교사는 성적·피드백·상담·알림을 4개의 분산된 도구(엑셀/문서/카톡/지필)에서 다룬다. 단일 학생 분석에 평균 8~12분.
-- 학부모는 학기 종료 전엔 자녀의 학교 데이터에 거의 접근 불가.
-- → 요구: **단일 SaaS + 실시간 분석 갱신 + 안전한 AI 비서**
-- **규모를 먼저 못박는다 (이후 모든 결정의 근거)**: 학교당 학생 ~500, 성적 ~30k row, 분석은 학급(30명) 단위 조회. *고QPS·대용량 스트리밍 도메인이 아니다.* ← 이 한 줄이 아키텍처·배포 선택 전체를 정당화한다.
-
-## 2. 솔루션 한 줄
-
-> **SaaS형 학생 관리 + 이벤트 기반 실시간 분석 + PII-안전 AI 비서**
+- **문제**: 교사가 성적·피드백·상담·알림을 4개 분산 도구(엑셀/문서/카톡/지필)로 관리 → 학생 1명 분석에 8~12분. 학부모는 학기 종료 전 접근 불가.
+- **솔루션 한 줄**: SaaS형 학생 관리 + 이벤트 기반 실시간 분석 + PII-안전 AI 비서.
+- **규모를 먼저 못박는다**(이후 모든 결정의 근거): 고QPS·대용량 스트리밍 도메인이 *아니다*.
 
 ---
 
-## 3. 아키텍처 개요 (3분)
+## 1. 기술 스택 선택 & 이유 (2분)
+
+| 계층 | 선택 | 대안 | **왜** |
+|------|------|------|--------|
+| FE | **React 18 + Vite + TS** | Next.js | 교사 대시보드라 SSR/SEO 불필요 → Next 오버헤드 회피 |
+| FE 상태/시각화 | TanStack Query + Recharts | Redux | 서버/클라이언트 상태 분리, 캐싱·재검증 자동 |
+| API | **FastAPI (async)** | Django/Flask | async I/O + Pydantic 검증 + 자동 OpenAPI + 단일 언어로 worker까지 |
+| DB | **PostgreSQL 단일** | PG + 별도 OLAP/broker | OLTP+OLAP+CDC+메시지 backplane을 한 엔진에 → 인프라 최소화 |
+| 드라이버 | **asyncpg** (Alembic만 psycopg2) | psycopg2 | LISTEN/NOTIFY 네이티브 + async |
+| CDC/메시지 | **Outbox + LISTEN/NOTIFY + SKIP LOCKED** | Kafka | 규모에 broker는 over-engineered (→ §8) |
+| 인증 | **JWT (access=메모리/refresh=HttpOnly)** | localStorage | XSS 노출 방지 |
+| LLM | **OpenAI 호환 SDK 단일** | provider별 SDK | `LLM_BASE_URL`만 교체 + 전송 전 PII 마스킹 |
+
+> **관통 원칙**: 컴포넌트 수를 늘리지 않는다 — 새 인프라마다 secret·모니터링·장애 표면 증가 → 규모가 정당화할 때까지 보류(YAGNI).
+
+---
+
+## 2. 아키텍처 설계 + 확장성 (3분)
 
 ```
-[Vercel/React] ──HTTPS──▶ [FastAPI (Render Web)]
-                            │  ├── INSERT public.outbox  (운영 변경과 같은 TX)
-                            ▼  ▼
-                          [Postgres (Render)]   ← OLTP + OLAP + CDC source + 메시지 backplane
-                          ┌──────────────────┐
-                          │ public.*  (OLTP) │
-                          │ public.outbox    │
-                          │ analytics.*(OLAP)│
-                          └──┬───────────▲───┘
-                             │ pg_notify  │ SKIP LOCKED claim + UPSERT
-                             ▼            │ + UPDATE processed_at
-              [outbox-publisher (Render Worker)]
-                             │ NOTIFY 4 channels
-              ┌──────────────┼──────────────┐
-              ▼              ▼              ▼
-        analytics-w1   analytics-w2   analytics-w3   (scale=N, 로컬 시연)
-              ── 모두 LISTEN, SKIP LOCKED로 row claim ──
-                             ▼
-                    [analytics.agg_*] ◀── 교사 대시보드 / 챗봇
+[Vercel/React] ──HTTPS──▶ [FastAPI (Render Web)] ──INSERT public.outbox (운영과 같은 TX)──┐
+                                                                                          ▼
+                          [Postgres]  ← OLTP(public) + OLAP(analytics) + CDC(outbox) + 메시지 backplane
+                             │ pg_notify(4 ch)            ▲ SKIP LOCKED claim + UPSERT
+                             ▼                            │
+                  [outbox-publisher] ──NOTIFY──▶ [analytics-worker ×N] ──▶ [analytics.agg_*] ──▶ 대시보드/챗봇
+                                              (모두 LISTEN, SKIP LOCKED로 정확히 1개만 처리)
 ```
 
 - **3계층 + 단일 Postgres가 메시지 브로커까지 겸함**. 외부 의존성은 LLM provider 1곳뿐.
-- **핵심 일관성 보장 (강조)**: 운영 변경(grade UPSERT)과 `public.outbox` INSERT가 **같은 트랜잭션** → publisher 다운/NOTIFY 유실 어느 경우에도 **이벤트 유실 0**. 유실 시 worker의 catch-up 폴링(60s)이 `WHERE processed_at IS NULL` 잔여분을 자동 처리. (Architecture §4.1)
+- **핵심 일관성**: 운영 변경(grade UPSERT)과 `outbox` INSERT가 **같은 트랜잭션** → publisher 다운/NOTIFY 유실에도 **이벤트 유실 0**. 유실 시 worker catch-up 폴링(60s)이 잔여분 자동 처리.
+- **운영/분석 스키마 분리**: 같은 PG 안 `public`/`analytics` 스키마 구분 + CDC로 OLTP/OLAP 워크로드 분리 (평가 기준 "동일 DB 내 스키마 구분 가능" 충족).
+
+**확장성 & 병목 (정직하게)**
+- **수평 확장**: `--scale analytics-worker=3` — N 워커가 동일 NOTIFY를 받아도 SKIP LOCKED로 1개만 처리 = **Kafka consumer group 등가** (Sidekiq·oban 패턴). → §9 라이브 로그.
+- **단일 병목**: Postgres 단일 인스턴스가 OLTP+OLAP+outbox+NOTIFY 공존. 평가 규모(수천 row)에선 무시 가능, 평가 후 read replica/외부 broker (Architecture §5·§6).
 
 ---
 
-## 4. 기술 스택 선택 이유 (3분) ★ 중점 ①
+## 3. API 명세 & Swagger (1분)
 
-| 계층 | 선택 | 주요 대안 | **왜** |
-|------|------|-----------|--------|
-| FE 프레임워크 | **React 18 + Vite + TS** | Next.js | 교사 전용 대시보드라 **SSR/SEO 불필요** → Next.js 오버헤드 회피. Vite HMR 속도 + Vercel 호환 |
-| FE 상태/시각화 | TanStack Query + Recharts | Redux + 직접 fetch | 서버 상태/클라이언트 상태 분리, 캐싱·재검증 자동화 |
-| API | **FastAPI (async)** | Django / Flask | async I/O로 asyncpg 활용, Pydantic v2 입력검증, 자동 OpenAPI 문서, **단일 언어(Python)로 worker까지** |
-| DB | **PostgreSQL 단일 인스턴스** | PG + 별도 OLAP/broker | OLTP(`public`) + OLAP(`analytics`) + CDC(`outbox`) + **메시지 backplane(NOTIFY)** 을 한 엔진에 → 인프라 최소화 |
-| DB 드라이버 | **asyncpg** (+ Alembic은 psycopg2) | psycopg2 only | asyncpg는 **LISTEN/NOTIFY 네이티브** + async 지원. 마이그레이션만 동기 드라이버로 분리 |
-| CDC / 메시지 | **Outbox + LISTEN/NOTIFY + SKIP LOCKED** | Kafka / Debezium | 도메인 규모에 broker는 over-engineered → §5에서 상세 |
-| 인증 | **JWT (access=메모리 / refresh=HttpOnly Cookie)** | localStorage 토큰 | localStorage는 XSS에 노출 → 프로젝트 규칙상 금지. refresh는 HttpOnly + SameSite=Strict |
-| LLM | **OpenAI 호환 SDK (단일 endpoint)** | provider별 SDK | `LLM_BASE_URL`만 바꾸면 Kimi/Moonshot 등 교체. 전송 전 **PII 마스킹 + k≥5 익명성** |
-
-> 관통하는 원칙: **컴포넌트 수를 늘리지 않는다.** 새 인프라를 추가할 때마다 secret·모니터링·장애 표면이 늘어난다 → 규모가 정당화할 때까지 보류(YAGNI).
-
-> **운영/분석 스키마 분리 — 평가 기준 충족**: 운영=`public`, 분석=`analytics`로 **같은 Postgres 안에서 스키마 구분**. 평가 기준이 *"물리적 분리는 불필요, 동일 DB 내 스키마 구분 가능"*이라 명시 → 허용된 방식을 그대로 채택(right-sizing). 증거: `alembic 0004 CREATE SCHEMA analytics`, 조회는 `analytics_query.py`가 `FROM analytics.agg_*`. 부하 증가 시 `analytics`만 read replica로 분리(§7). *기준 최소요건(스키마 구분)을 넘어 CDC로 OLTP/OLAP 워크로드까지 분리.*
+- **계약 우선**: Pydantic 스키마 = 단일 진실 공급원 → **Swagger 자동생성** → FE 타입 일치.
+- FastAPI OpenAPI 3.1 + `tags_metadata`(14 그룹 설명)·license·contact. 대화형 문서 `/docs`(Swagger)·`/redoc`.
+- `scripts/export_openapi.py` → `docs/api/openapi.json` (**53 paths / 53 schemas**) — Postman 임포트·클라이언트 생성용.
+- 에러 계약: 모든 비즈니스 에러는 `{ detail, code }` (AppException) — `code`는 머신 판독용.
+- **슬라이드**: 라이브 `/docs` 1컷. (Architecture §4.6)
 
 ---
 
-## 5. 아키텍처 의사결정: Kafka → LISTEN/NOTIFY (3분) ★ 중점 ② · 발표 하이라이트
+## 4. UML / ERD (1.5분)
 
-**1차 결정 — ADR-002 (5/3): Outbox + Kafka KRaft 단일 노드 + aiokafka**
-- 이유: rubric의 *"Kafka 같은 메시지 스트림"* 가점 + 이벤트 유실 방어(outbox commit → 부팅 catch-up)
-- 대안 비교: Debezium(❌ 1인·미경험엔 critical path 위험), App-direct publish(❌ broker 다운 시 유실)
-- **실제로 구현·통합테스트까지 완료** (`scripts/kafka_smoke.py` round-trip OK)
-
-**재평가 — ADR-003 (5/23)**
-1. rubric 재해석: 가점 대상은 *"event-driven 분석 갱신 구조"*, Kafka는 **예시일 뿐**
-2. 규모 부정합: 30k row에 partition·consumer group·broker cluster·schema registry는 가치 없음
-3. 클라우드 배포: managed Kafka(Confluent/Redpanda) → secret·SASL·무료 한도·추가 비용
-
-**2차 결정 — Outbox 유지 + Kafka 제거 + LISTEN/NOTIFY + `SELECT FOR UPDATE SKIP LOCKED`**
-- **SKIP LOCKED = Kafka consumer group 등가물**: N개 워커가 동일 NOTIFY를 받아도 row lock으로 정확히 1개만 처리 (Sidekiq `bulk_dequeue`, oban 등 프로덕션 큐의 표준 패턴)
-- 변경 범위는 *메시지 채널뿐* (`aiokafka` → `asyncpg LISTEN/NOTIFY`). outbox·analytics·멱등성·catch-up·dead-letter는 그대로 보존
-
-**장점** (ADR-003 Consequences)
-- Kafka 운영 부담 0 / 클라우드 배포 단순(브로커·secret 제거) / 자산 보존 / 테스트 단순(testcontainers Postgres 단일 컨테이너)
-
-**단점 & 완화** ← 점수 포인트 (장점만 나열하면 신뢰 하락; 단점+대응을 솔직히)
-| 단점 | 완화 |
-|------|------|
-| NOTIFY는 휘발성 (유실 가능) | outbox에 남아 있어 catch-up 폴링(60s)이 처리 → 정합성 영향 0 |
-| NOTIFY payload 8KB 한도 | `{event_id}` 메타만 전송, 본문은 worker가 SELECT로 fetch |
-| scale 데모 설명 한 단계 추가 | 슬라이드에 "SKIP LOCKED = consumer group" 명시 |
-
-**메타 교훈 (마무리 한 문장)**: 결정을 **번복하고 그 근거를 ADR로 남긴 것** 자체가 핵심 — right-sizing · YAGNI · *되돌릴 수 있는 결정(reversible decision)* 의 가치.
+- **유스케이스**: 교사(성적·상담·피드백·분석) / 학생(본인 조회) / 학부모(자녀 조회) — 3역할.
+- **시퀀스 (핵심 1개)**: 성적 입력 → outbox(같은 TX) → publisher NOTIFY → worker SKIP LOCKED → analytics UPSERT. (인증 시퀀스는 축약)
+- **ERD 핵심**: School → User/Class → Student → Grade/Attendance/Feedback/Counseling. 멀티테넌트는 모든 테이블 `school_id` 격리. (Design Spec §2)
+- **용어 정밀화**: User/Student 분리 = 3정규형이 아니라 **역할별 서브타입 분리**(NULL 방지). 삭제 정책은 soft-delete(`is_active`/보존) 기준으로 통일.
 
 ---
 
-## 6. 배포 토폴로지 & 플랫폼 선택 이유 (2분) ★ 중점 ③ · 배포
+## 5. 인증 — 학생 / 교사 (1.5분)
 
-**Two surfaces — 클라우드(외부 demo) + 로컬(분산 시연)** (Architecture §8)
+- **세션 전략**: JWT access(메모리/Zustand) + refresh(HttpOnly·SameSite=Strict 쿠키). access 1h / refresh 7d.
+- **RBAC 3계층**: JWT 미들웨어(role+school_id 추출) → 라우터 역할 화이트리스트 → 서비스 row-level scope(`Class.teacher_id = 나`).
+- **계정 발급 (중간발표 최대 문제 → 완결)**:
+  - **학생·학부모 = 초대 링크** 가입 (`pending_invite`, 서버가 비밀번호 고정 주입 안 함).
+  - **교사 = Google OAuth + 학교 도메인 화이트리스트** — `login`(state 쿠키 발급) → Google 동의 → `callback`(state 검증→token→userinfo→`email_verified`→도메인 게이트→교사 발급).
+- **OAuth 보안 강점 2가지** (자동 보안리뷰로 발견·수정):
+  - state **CSRF 방어**: HttpOnly 쿠키 바인딩 + `secrets.compare_digest` → 불일치 400 `AUTH_OAUTH_STATE_MISMATCH`.
+  - stub **우회 차단**: production에서 stub 호출 시 503 `AUTH_OAUTH_NOT_CONFIGURED`.
+- **데이터 보호**: bcrypt(cost≥12), 학생 PII 로그 masking, LLM엔 토큰(`학생A`)+k≥5 익명성. (Architecture §4.5·§7)
+
+---
+
+## 6. 테스트 (1.5분)
+
+```
+        ╱╲        E2E  : Playwright 11 spec (실 브라우저 사용자 플로우)
+       ╱──╲       통합 : testcontainers 실 Postgres (outbox→analytics 정합성, scale=3 중복 0)
+      ╱────╲      단위 : 200 passed / 백엔드 커버리지 81% (계산·권한·격리·sanitizer·OAuth 게이트)
+     ╱──────╲
+```
+
+- **메시지**: "테스트 통과 한 줄"이 아니라 **3계층이 각기 다른 실패를 잡는다** — 단위=로직, 통합=컴포넌트 계약, E2E=사용자 경험.
+- sanitizer·grade_calculator 100% coverage. (`docs/notes/test-pyramid-presentation.md`)
+- **정직성**: frontend 단위테스트는 호스트 환경(Node 25≠vitest 1.6 + Linux node_modules)으로 일시 보류 → **원인 규명+해결책 보유**로 프레이밍. E2E가 frontend를 실 브라우저로 검증.
+
+---
+
+## 7. 배포 & CI/CD 파이프라인 (2분)
+
+**Two surfaces** — 클라우드(외부 demo) + 로컬(분산 시연), 동일 코드·토폴로지·마이그레이션, 분기는 환경변수뿐.
+
 | 환경 | 용도 | 컴포넌트 |
 |------|------|---------|
-| cloud (Vercel + Render) | 외부 reviewer 접속용 라이브 URL | Vercel(FE) + Render(API Web + outbox-publisher + analytics-worker) + Render Postgres |
-| local (docker-compose) | `--scale analytics-worker=3` 분산 시연 | 위 동등 토폴로지 + 시드 데이터 |
+| cloud (Vercel+Render) | 외부 라이브 URL | Vercel(FE) + Render(API + publisher + worker) + Render Postgres |
+| local (docker-compose) | `--scale analytics-worker=3` 분산 시연 | 동등 토폴로지 + 시드 |
 
-- **왜 둘로 나눴나?** Render free tier에서 worker 다중 인스턴스는 비용·cold start 부담 → **scale 시연은 로컬**, **라이브 URL은 클라우드**. 동일 코드·토폴로지·마이그레이션, 분기는 환경변수뿐.
-
-- **왜 Render + Vercel인가?**
-  - 결정적 제약: LISTEN worker는 **항상 켜진 영속 연결**이 필요 → 순수 서버리스(Lambda / Cloud Run / Vercel Functions)는 **부적합**. web + worker + managed Postgres를 돌리는 *컨테이너 PaaS*가 필요.
-  - Render: web·worker·Postgres를 **blueprint(`render.yaml`) 하나**로 선언. Vercel: 정적 FE 호스팅 최적 + CD 자동화.
-
-- **왜 AWS가 아닌가?** (같은 right-sizing 논리)
-  - 이 규모에 ECS Fargate + RDS + ALB + **NAT Gateway**는 비용 3~5배, VPC·IAM·IaC 운영 과중. 평가용 프로토타입엔 과함.
-  - "수만 사용자·규제 준수·전담 인프라 인력"이 *실재할 때* 가치 → 확장 트리거 발생 시 평가 후 재평가 (Architecture §10).
-
-- **운영 현실 메모 (배포도 의사결정이다)**: Render free Postgres는 **생성 30일 후 만료**. 라이브 데모를 유지하려면 DB를 유료($7/mo)로 전환해야 한다 → *무료 티어의 수명*도 배포 설계의 일부로 명시.
-
-- **무중단 배포 (③, 수업 커리큘럼 정렬)**: liveness(`/health`, 프로세스 생존) ≠ readiness(`/ready`, `SELECT 1` DB 검증 → 503 `DB_NOT_READY`)를 **분리**. 롤링 시 신 인스턴스가 `/ready` 통과 후에만 트래픽 수신 → 가용 용량 0 구간 없음. Render는 `healthCheckPath`, 예시 K8s(`deploy/k8s/`, `RollingUpdate maxUnavailable=0`)는 readinessProbe로 동일 의미론. K8s 재프레이밍 스크립트·시퀀스는 §12-③ / `docs/notes/zero-downtime-deployment.md`.
-
-- **롤백**: 로컬 `docker-compose down -v && make up`; 클라우드 Render 1-click redeploy. 마이그레이션은 평가 종료까지 forward-only.
+- **CI/CD**: `.github/workflows/{ci,cd,e2e}.yml` — main push → 테스트 게이트 → Render/Vercel 자동 배포 (GitOps 단순형).
+- **무중단 배포**: liveness(`/health`, 프로세스 생존) ≠ readiness(`/ready`, `SELECT 1`→503 `DB_NOT_READY`) **분리**. 롤링 시 신 인스턴스 `/ready` 통과 후에만 트래픽 수신 → 가용 용량 0 구간 없음. Render는 `healthCheckPath`, 예시 K8s(`deploy/k8s/`, `maxUnavailable=0`+probe)는 동일 의미론.
+- **K8s 재프레이밍**(교수 심기 관리): "K8s·Argo·무중단은 대규모 표준. 핵심 개념(헬스체크 무중단·선언적 배포·수평확장)은 충족했고, 풀 클러스터는 사용자 0명 환경에 과한 비용이라 **의도적 제외** — 도입 트리거는 §10·ADR에 명시." → 부정이 아니라 **등가+트레이드오프**.
+- **왜 Render+Vercel?** LISTEN worker는 영속 연결 필요 → 순수 서버리스 부적합. web+worker+managed PG를 `render.yaml` 하나로 선언. **왜 AWS 아닌가?** 이 규모에 ECS+RDS+ALB+NAT GW는 비용·운영 과중.
+- **운영 현실 메모**: Render free Postgres는 생성 30일 후 만료 → 라이브 유지 시 유료 전환 필요. (`docs/notes/zero-downtime-deployment.md`)
 
 ---
 
-## 7. 확장성 & 병목 (1.5분 · 압축 가능)
+## 8. 맞닥뜨린 문제와 해결: Kafka → LISTEN/NOTIFY (2.5분) ★ 발표 하이라이트
 
-- **수평 확장**: `docker-compose up --scale analytics-worker=3` — N개 워커가 동일 NOTIFY를 받아도 SKIP LOCKED로 1개만 처리. publisher는 단일이 기본이나 다중도 race-free.
-- **단일 병목 (정직하게)**: Postgres 단일 인스턴스가 OLTP+OLAP+outbox+NOTIFY backplane 공존. NOTIFY는 인스턴스 글로벌 큐. → 평가 규모(수천 row)에선 무시 가능, 평가 후 read replica / 외부 broker (Architecture §5·§6).
-- 발표 입증: 다이어그램 + scale=3 라이브 로그.
+**1차 결정 — ADR-002 (5/3)**: Outbox + Kafka KRaft + aiokafka. rubric "Kafka 같은 메시지 스트림" 가점 + 유실 방어. **구현·통합테스트까지 완료**.
 
-## 8. 보안 경계 (1분 · 압축 가능)
+**재평가 — ADR-003 (5/23)**:
+1. rubric 재해석 — 가점 대상은 *"event-driven 분석 갱신 구조"*, Kafka는 예시일 뿐.
+2. 규모 부정합 — 30k row에 partition·consumer group·broker cluster·schema registry는 가치 없음.
+3. 클라우드 배포 — managed Kafka는 secret·SASL·비용 추가.
 
-- **RBAC 3계층**: JWT 미들웨어(role + school_id 추출) → 라우터 역할 화이트리스트 → 서비스 row-level scope(`Class.teacher_id = current_user.id`)
-- **데이터 보호**: bcrypt(cost≥12), refresh=HttpOnly+SameSite=Strict, 학생 PII 로그 masking, LLM엔 **토큰만(`학생A`) + k≥5** 익명성 (Architecture §7).
-- **계정 발급 완결 (⑤)**: 학생·학부모=초대 링크 / **교사=Google OAuth + 학교 도메인 화이트리스트**. OAuth는 인증 진입점만 추가하고 인가는 위 RBAC 3계층으로 일원화. state CSRF 방어·stub production 차단은 §12-⑤.
+**2차 결정**: Outbox 유지 + Kafka 제거 + **LISTEN/NOTIFY + SKIP LOCKED**.
+- **SKIP LOCKED = consumer group 등가**. 변경 범위는 *메시지 채널뿐* — outbox·멱등성·catch-up·dead-letter는 보존.
+
+**단점 & 완화** (장점만 나열하면 신뢰 하락)
+| 단점 | 완화 |
+|------|------|
+| NOTIFY 휘발성(유실 가능) | outbox에 남아 catch-up 폴링(60s)이 처리 → 정합성 영향 0 |
+| NOTIFY payload 8KB 한도 | `{event_id}`만 전송, 본문은 worker가 SELECT |
+
+> **메타 교훈**: 결정을 **번복하고 그 근거를 ADR로 남긴 것** 자체가 핵심 — right-sizing · YAGNI · 되돌릴 수 있는 결정의 가치. (이 서사는 Jira 스프린트 위 백로그 재계획으로도 추적 — `docs/notes/agile-jira-presentation.md`)
 
 ---
 
-## 9. 시연 (10분)
+## 9. 데모 시연 (10분)
 
-자세한 순서는 `docs/notes/demo-rehearsal-checklist.md` 참조.
+자세한 순서는 `docs/notes/demo-rehearsal-checklist.md`.
 
 | # | 시연 | 강조 |
 |---|------|------|
-| 0 | **교사 Google OAuth 로그인** (⑤) | 학교 도메인 화이트리스트 → 교사 권한 발급. 비허용 도메인 차단 1컷 |
-| 1 | 교사 로그인 → 대시보드 | 30명 학급의 평균/분포가 즉시 보임 |
-| 2 | 성적 1건 입력 | Outbox commit (운영 변경과 같은 TX) |
+| 0 | 교사 Google OAuth 로그인 | 도메인 화이트리스트 → 교사 발급, 비허용 차단 1컷 |
+| 1 | 로그인 → 대시보드 | 30명 학급 평균/분포 즉시 |
+| 2 | 성적 1건 입력 | Outbox commit (운영과 같은 TX) |
 | 3 | 분석 위젯 자동 갱신 | < 1초 (REQ-074) |
-| 4 | `make demo-scale` | worker 3개 SKIP LOCKED 분산 처리 로그 |
-| 5 | AI 비서에 "이 반 영어 평균은?" | 답변, 학생명은 토큰으로만 |
-| 6 | 1명만 있는 반에서 같은 질문 | k<5 거부 메시지 |
-| 7 | **E2E 1개 라이브** (②) | `npx playwright test landing-login-grade` — 실 브라우저 검증 |
-| 8 | **Swagger `/docs`** (①) | 계약 우선 — Pydantic 스키마 = 단일 진실 공급원 |
+| 4 | `make demo-scale` | worker 3개 SKIP LOCKED 분산 로그 |
+| 5 | AI 비서 "이 반 영어 평균은?" | 학생명은 토큰으로만 |
+| 6 | 1명 반에서 같은 질문 | k<5 거부 |
+| 7 | E2E 1개 라이브 | `playwright test landing-login-grade` |
+| 8 | Swagger `/docs` | 계약 우선 1컷 |
 
-## 10. 정량 결과 (1분)
-
-- REQ-074 SLA(분석 반영 ≤60s) — `docs/notes/analytics-sla-baseline.md`
-- **테스트 피라미드 (②, 실측 2026-05-31)**: 단위 **200 passed / 백엔드 커버리지 81%** + 통합(testcontainers 실 Postgres) + **E2E Playwright 11 spec**. sanitizer·grade_calculator 100% coverage.
-- **API 명세 (①)**: OpenAPI 3.1 자동 + `scripts/export_openapi.py` → 53 paths / 53 schemas (`docs/api/openapi.json`)
-- (계층별 상세·발표 서사는 §12-②, `docs/notes/test-pyramid-presentation.md`)
-
-## 11. 다음 단계 (1분)
-
-- 학부모 모바일 알림(FCM)
-- 교과서/시험지 OCR → 자동 채점
-- LLM 응답 캐시 + 비용 모니터링
-- (인프라) 확장 트리거 도달 시 read replica / 외부 broker / 클라우드 재평가 — Architecture §10
-
----
-
-## 12. 발표 보완 5종 — 수업 커리큘럼 축 정렬 (4~5분, 신설)
-
-> 수업 커리큘럼 = 루브릭. 그 축(요구사항→UML→개발→**API 명세**→정적분석→**테스트(unit→integration→E2E)**→**배포(무중단)**→QA→AWS→**Agile**)에 정면 정렬한다. 통합 계획·진척은 `docs/notes/final-presentation-improvement-plan.md`.
-
-### ① OpenAPI / Swagger — 계약 우선(contract-first)
-- **메시지**: "Pydantic 스키마 = 단일 진실 공급원 → Swagger 자동생성 → FE 타입 일치". API를 계약으로 합의.
-- FastAPI OpenAPI 3.1 자동 + `app/main.py` `tags_metadata`(14 그룹 설명)·license·contact. 대화형 문서 `/docs`(Swagger) · `/redoc`.
-- `scripts/export_openapi.py` → `docs/api/openapi.json` (**53 paths / 53 schemas**) — Postman 임포트·클라이언트 생성용.
-- **슬라이드**: 라이브 `/docs` 1컷 + contract-first 다이어그램. (Architecture §4.6)
-
-### ② 테스트 피라미드 (unit → integration → E2E)
-- **메시지**: "테스트 통과 한 줄"이 아니라 **3계층이 각기 다른 실패를 잡는다** + 백엔드 81% 커버리지로 뒷받침.
-
-```
-        ╱╲         E2E  : Playwright 11 spec (실 브라우저 사용자 플로우)
-       ╱──╲        통합 : testcontainers 실 Postgres (outbox→analytics 정합성, scale=3 중복 0)
-      ╱────╲       단위 : 200 passed / 커버리지 81% (계산·권한·격리·sanitizer·OAuth 게이트)
-     ╱──────╲
-```
-- **정직성 슬라이드**: frontend 단위테스트는 호스트 환경(Node 25≠vitest 1.6 + Linux node_modules)으로 일시 보류 → **원인 규명+해결책 보유**로 프레이밍(디버깅 역량 증거). E2E가 frontend를 실 브라우저로 검증. (`docs/notes/test-pyramid-presentation.md`, `frontend-test-env-fix.md`)
-- **PRD "E2E 미작성"은 stale → 정정**.
-
-### ③ 무중단 배포 (Argo CD / K8s 재프레이밍)
-- **재프레이밍 (교수 심기 관리)**: "K8s·Argo·무중단은 대규모 운영의 표준. 저희는 그 **핵심 개념**(헬스체크 무중단 전환·선언적 배포·수평 확장)을 평가 규모에 맞는 형태로 구현 — 무중단=`/ready` readiness 게이트, 선언적 배포=`render.yaml`+GitHub Actions GitOps, 수평 확장=SKIP LOCKED. 풀 클러스터는 사용자 0명 환경에 과한 비용이라 의도적 제외, 도입 트리거는 ADR·§10에 명시."
-- **핵심**: 부정("필요 없다")이 아니라 **등가+트레이드오프**.
-- liveness `/health` ≠ readiness `/ready`(`SELECT 1`→503 `DB_NOT_READY`) 분리. 예시 K8s `deploy/k8s/`(`maxUnavailable=0`+probe). 롤링 시퀀스·Q&A는 `docs/notes/zero-downtime-deployment.md`. (Architecture §8.1)
-
-### ④ Agile / Jira
-- **메시지**: "워터폴이 아니라 애자일로 운영" — 백로그→스프린트→이슈, 요구사항(REQ-xxx)→Jira 에픽/스토리 추적성.
-- 하이라이트: **Kafka→LISTEN/NOTIFY 백로그 재계획**(ADR-002→003)을 스프린트 위에서 의사결정한 서사 = §5와 연결. 실제 보드(Project SMS, Board 2) 스크린샷.
-- 발표 산출물·14 스프린트 타임라인: `docs/notes/agile-jira-presentation.md`. **할 일: 보드 스크린샷 캡처**.
-
-### ⑤ 교사 인증 — Google OAuth + 학교 도메인 화이트리스트 (유일한 실질 신규 구현)
-- **메시지**: 중간발표 "가장 큰 문제(계정 발급)"의 교사 부분을 실제 해결 → 학생=초대 / 교사=OAuth로 **완결**.
-- 흐름: `GET /auth/oauth/google/login`(state 쿠키 발급) → Google 동의 → `/callback`(state 검증→token→userinfo→도메인 게이트→교사 발급). (Architecture §4.5)
-- **보안 강점 2가지 (자동 보안리뷰로 발견·수정 → 발표 자산화)**:
-  - **state CSRF 방어**: HttpOnly 쿠키 바인딩 + `secrets.compare_digest` → `AUTH_OAUTH_STATE_MISMATCH`
-  - **stub 우회 차단**: production에서 stub 호출 시 503 `AUTH_OAUTH_NOT_CONFIGURED` (인증 우회 불가)
-- TDD: `backend/tests/test_oauth.py` 8 cases (도메인 허용/거부·state·중복·prod 가드). 데모는 stub 모드로 Google 등록 없이 가능.
+**다음 단계**: 학부모 모바일 알림(FCM) · OCR 자동채점 · LLM 응답 캐시 · (인프라) 확장 트리거 시 read replica/외부 broker (Architecture §10).
 
 ---
 
@@ -230,63 +168,33 @@
 
 | 질문 | 답변 |
 |------|------|
-| 왜 Kafka를 안 썼나? | 도메인 규모. 30k row에 broker cluster·partition·schema registry는 의미 없음 |
-| LISTEN/NOTIFY가 메시지 스트림인가? | Postgres 내장 pub/sub. Sidekiq·oban 등 프로덕션 큐가 SKIP LOCKED 기반으로 동작 |
+| 왜 Kafka를 안 썼나? | 도메인 규모. 30k row에 broker cluster·partition은 의미 없음 |
+| LISTEN/NOTIFY가 메시지 스트림인가? | Postgres 내장 pub/sub. Sidekiq·oban이 SKIP LOCKED로 동작 |
 | 알림이 유실되면? | outbox에 남아 catch-up 폴링(60s)이 처리 → 정합성 영향 0 |
-| scale은 어떻게 보장하나? | N 워커가 같은 NOTIFY를 받아도 SKIP LOCKED로 정확히 1개만 처리 = consumer group 등가 |
-| 왜 처음부터 LISTEN/NOTIFY를 안 했나? | 처음엔 rubric 문구상 Kafka가 가점에 안전해 보였다. 재해석 후 핵심이 'event-driven 구조'임을 확인, 규모를 보고 전환 (이 솔직함이 강점) |
-| 왜 AWS가 아니라 Render인가? | 같은 right-sizing. 이 규모에 ECS+RDS+NAT GW는 비용·운영 과중. worker 영속 연결 때문에 순수 서버리스도 부적합 |
-| 운영 DB와 분석 DB를 왜 물리적으로 안 나눴나? | 평가 기준이 동일 DB 내 스키마 분리를 허용. `public`/`analytics` 스키마로 구분 + CDC로 OLTP/OLAP 워크로드 분리. 물리 분리는 규모가 정당화할 때(read replica/별도 인스턴스) |
-| K8s/Argo CD를 왜 안 썼나? | 핵심 개념은 충족(readiness 무중단·GitOps·SKIP LOCKED 수평확장). 사용자 0명 환경에 풀 클러스터는 과한 비용 → 의도적 제외, 도입 트리거는 §10 명시 (③) |
-| 무중단 배포를 어떻게 보장하나? | liveness/readiness 분리. 신 인스턴스 `/ready` 통과 후에만 트래픽 수신(`maxUnavailable=0`), DB 끊김 시 재시작 아닌 트래픽 제외 (③) |
-| 테스트는 충분한가? | 3계층 피라미드: 단위 200/커버리지 81% + 통합 testcontainers + E2E 11. 각 계층이 다른 실패를 잡음 (②) |
-| OAuth state를 검증하나? (CSRF) | 발급 state를 HttpOnly 쿠키에 바인딩 후 `compare_digest`로 비교. 불일치 400. stub은 production에서 503으로 차단 (⑤) |
+| scale 보장? | N 워커가 같은 NOTIFY를 받아도 SKIP LOCKED로 1개만 = consumer group 등가 |
+| 왜 처음부터 NOTIFY를 안 했나? | rubric상 Kafka가 안전해 보였다 → 재해석 후 'event-driven 구조'가 핵심임을 확인, 규모 보고 전환 |
+| 왜 AWS가 아니라 Render? | right-sizing. ECS+RDS+NAT GW는 과중, worker 영속 연결로 순수 서버리스도 부적합 |
+| 운영/분석 DB를 왜 물리 분리 안 했나? | 동일 DB 내 스키마 분리 허용 + CDC로 워크로드 분리. 물리 분리는 규모가 정당화할 때 |
+| K8s/Argo를 왜 안 썼나? | 핵심 개념 충족(readiness 무중단·GitOps·SKIP LOCKED). 풀 클러스터는 과한 비용 → 의도적 제외 |
+| 무중단 배포 보장? | liveness/readiness 분리. 신 인스턴스 `/ready` 통과 후 트래픽, DB 끊김 시 재시작 아닌 제외 |
+| 테스트 충분한가? | 3계층: 단위 200/81% + 통합 testcontainers + E2E 11. 각 계층이 다른 실패를 잡음 |
+| OAuth state 검증(CSRF)? | state를 HttpOnly 쿠키에 바인딩 후 `compare_digest`. 불일치 400, stub은 prod에서 503 |
 
 ---
 
-## 부록 B. AI 비서 요청의 전 과정 — "이번 학기 우리 반 영어 평균이 어때?"
+## 부록 B. AI 비서 안전성 — "이 반 영어 평균은?" 한 문장 뒤
 
-> 시연 #5의 한 문장 뒤에서 실제로 일어나는 일. "그래서 AI가 *어떻게* 안전한가?"라는 질문이 나올 때의 대본. 코드 경로: `frontend/src/stores/chatStore.ts` → `backend/app/routers/chat.py` → `services/*`.
+> "AI가 학생 개인정보를 외부로 보내지 않나?" 질문 대본. 코드: `chatStore.ts` → `routers/chat.py` → `services/*`.
 
-### 요청 → 응답 (순차)
+1. **호출**: `POST /api/v1/chat` + access_token(메모리) Bearer.
+2. **레이트리밋**: 교사당 10회/분 → 429.
+3. **RBAC**: `require_role("teacher")` → role+school_id+user_id.
+4. **의도 분류**: "이번" → 최신 학기 룰 선택 (LLM tool calling 없이 비용 0).
+5. **컨텍스트**: `WHERE Class.teacher_id=나 AND school_id=내 학교` 담임 학급만. `analytics.agg_*`에서 2쿼리(N+1 회피).
+6. **PII 마스킹 + k≥5** ★: 5명 미만 → `SmallSampleError`로 LLM 호출 거부. 이름→`학생A`, 학번→`seq_001`, id/email/phone 삭제. `token_map`은 서버 메모리에만.
+7. **LLM 호출**: system(분석 지시+마스킹 JSON)+user(질문). 외부 페이로드에 식별정보 0건 — `test_llm_sanitizer.py`가 보증.
+8. **역매핑**: 응답의 `학생A` 토큰 → 실제 학생(`referenced_students[]`)으로 구조화.
 
-1. **FE 위젯 → API 호출** (`chatStore.send` → `api/chat.ts:postChat`)
-   - `POST /api/v1/chat`, body `{ thread_id, message: "이번 학기 우리 반 영어 평균이 어때?" }`.
-   - access_token은 **메모리(Zustand)** 에서 `Authorization: Bearer` 헤더로 실림 (refresh 쿠키는 건드리지 않음).
+**실패 분기**: 학생<5 → k≥5 거부 / OpenAI 타임아웃 → 504 `CHAT_TIMEOUT` / 업스트림 오류 → 502 `CHAT_UPSTREAM_ERROR` / 키 없음 → stub 폴백.
 
-2. **레이트 리밋** (`ratelimit.py`, slowapi) — 교사당 **10회/분** (`user_id_key`). 초과 시 429 → FE "요청이 너무 잦습니다".
-
-3. **인증 + RBAC** (`require_role("teacher")`) — JWT 검증 → `role + school_id + user_id` 추출 → teacher 화이트리스트. 비-교사면 403.
-
-4. **의도 분류: 학기 선택** (`chat_intent.resolve_semester_id`, 룰 기반) — 메시지의 **"이번"** → `Semester`를 year·term DESC 정렬한 **최신 학기** 선택. LLM tool calling 없이 비용 0·지연 0.
-
-5. **컨텍스트 조회** (`chat_context.fetch_student_rows`) — **RBAC row-level scope**
-   - `WHERE Class.teacher_id = 나 AND User.school_id = 내 학교` 로 **담임 학급 학생만**.
-   - `analytics.agg_*` 읽기 캐시에서 집계 **2쿼리**(`get_overall_batch` + `get_subjects_batch`)로 N+1 회피 → 학생별 `{ overall, subjects[] }` (과목별 평균·최고·최저·표본수). 운영 테이블(`public`)은 건드리지 않음.
-
-6. **PII 마스킹 + k≥5 익명성 가드** (`llm_sanitizer.mask_context`) ★ 보안 핵심
-   - 학생 **5명 미만이면 `SmallSampleError` → LLM 호출 자체를 거부**("개인 식별을 막기 위해…"). 우리 반 30명이라 통과(시연 #6은 이 분기를 보여줌).
-   - 각 학생: 이름 → `학생A`, 학번 → `seq_001`, **student_id·email·phone 삭제**, subjects의 `subject_id`(UUID) 제거.
-   - `token_map`(학생A → 실제 UUID)은 **서버 메모리에만** 보관, 외부 전송 X.
-
-7. **프롬프트 구성 + LLM 호출** (`routers/chat.py` → `llm_client.OpenAiLlmClient`)
-   - system = 한국어 분석 비서 지시 + `[학급 통계]` 마스킹 JSON / user = 원본 질문.
-   - `LLM_PROVIDER=auto` + 키 존재 → OpenAI(`gpt-4o-mini`, max_tokens 1024, timeout 10s). `LLM_BASE_URL`만 바꾸면 다른 호환 게이트웨이로 교체.
-   - **외부로 나가는 페이로드엔 학생 식별정보 0건**(마스킹 토큰뿐) — `tests/test_llm_sanitizer.py`가 보증.
-   - 모델이 마스킹 통계에서 `name=="영어"` 행의 `avg_score`를 학생들에 걸쳐 집계해 평균을 답함. (서버가 학급 영어 평균을 미리 계산해 주지 않음 — 모델이 JSON 위에서 산출하는 구조)
-
-8. **응답 후처리: 토큰 역매핑** (`routers/chat.py`) — 응답 텍스트의 `학생A` 등 토큰(`학생[A-Z]{1,2}`)을 `token_map`으로 실제 학생에 매핑해 `referenced_students[]`(id+이름)만 구조화 반환.
-
-9. **FE 표시** (`chatStore`) — `referenced_students`로 토큰을 실제 이름으로 치환해 말풍선 렌더.
-
-### 실패 분기 (정직하게)
-| 상황 | 결과 |
-|------|------|
-| 학생 < 5명 | k≥5 거부 메시지 (시연 #6) |
-| OpenAI 타임아웃 | 504 `CHAT_TIMEOUT` |
-| 업스트림 오류(쿼터·인증 등) | 502 `CHAT_UPSTREAM_ERROR` |
-| 키 없음 / `LLM_PROVIDER=stub` | 결정론적 stub 폴백 (데모·테스트용) |
-
-### 발표 포인트
-- **"AI가 학생 개인정보를 외부로 보내지 않나?"** → 3중 안전장치: ① 컨텍스트를 담임 학급으로 한정 + ② 전송 전 이름·식별자 토큰 치환 + ③ k<5 거부. 역매핑은 **서버 메모리에서만**.
-- 별도 AI 마이크로서비스 없이 **FastAPI 단일 엔드포인트** — right-sizing 원칙의 연장(부록 A·§4와 동일한 메시지).
+**발표 포인트**: 3중 안전장치(담임 학급 한정 + 토큰 치환 + k<5 거부), 역매핑은 서버 메모리에서만. 별도 AI 마이크로서비스 없이 FastAPI 단일 엔드포인트 = right-sizing.
