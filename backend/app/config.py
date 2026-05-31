@@ -57,8 +57,14 @@ class Settings(BaseSettings):
     # "auto" picks OpenAI when key present, else stub. Set to "stub" to force stub.
     llm_provider: str = "auto"
 
+    # 배포 환경 구분 — "production"에서는 OAuth stub(인증 우회) 금지.
+    environment: str = "dev"
+
     # Teacher Google OAuth (REQ-001). "auto" → real when google_client_id set, else stub.
     oauth_provider: str = "auto"
+    # stub OAuth는 인증 우회가 가능하므로 production에서는 기본 차단.
+    # 데모 목적으로 명시적 허용이 필요할 때만 True (의식적 선택).
+    allow_oauth_stub: bool = False
     google_client_id: str | None = None
     google_client_secret: str | None = None
     google_redirect_uri: str = "http://localhost:5173/auth/oauth/google/callback"

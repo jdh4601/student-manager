@@ -83,6 +83,25 @@ async def test_callback_rejects_missing_state(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_stub_refused_in_production(client: AsyncClient, monkeypatch):
+    # production + 명시적 허용 없음 → stub 인증 우회 차단 (503)
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "allow_oauth_stub", False)
+    res = await client.get("/api/v1/auth/oauth/google/login")
+    assert res.status_code == 503
+    assert res.json()["code"] == "AUTH_OAUTH_NOT_CONFIGURED"
+
+
+@pytest.mark.asyncio
+async def test_stub_allowed_in_production_with_explicit_flag(client: AsyncClient, monkeypatch):
+    # 데모 목적으로 의식적으로 허용한 경우엔 동작
+    monkeypatch.setattr(settings, "environment", "production")
+    monkeypatch.setattr(settings, "allow_oauth_stub", True)
+    res = await client.get("/api/v1/auth/oauth/google/login")
+    assert res.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_disallowed_domain_rejected(client: AsyncClient):
     state = await _begin_oauth(client)
     res = await client.get(

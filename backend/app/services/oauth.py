@@ -99,14 +99,31 @@ class RealGoogleOAuthClient:
         )
 
 
+def _stub_permitted() -> bool:
+    """stub OAuth는 인증 우회가 가능 → 비-production 또는 명시적 허용일 때만."""
+    return settings.environment != "production" or settings.allow_oauth_stub
+
+
+def _require_stub() -> GoogleOAuthClient:
+    if not _stub_permitted():
+        # production에서 자격증명 없이 stub로 폴백 = 인증 우회. 명시적으로 거부.
+        raise AppException(
+            503,
+            "OAuth가 구성되지 않았습니다. 관리자에게 문의하세요.",
+            "AUTH_OAUTH_NOT_CONFIGURED",
+        )
+    return StubGoogleOAuthClient()
+
+
 def get_oauth_client() -> GoogleOAuthClient:
     """provider 설정에 따라 stub/real 선택 (LLM 클라이언트와 동일 패턴)."""
     provider = settings.oauth_provider
     if provider == "stub":
-        return StubGoogleOAuthClient()
+        return _require_stub()
     if provider == "real" or (provider == "auto" and settings.google_client_id):
         return RealGoogleOAuthClient()
-    return StubGoogleOAuthClient()
+    # auto + 자격증명 없음 → stub 폴백은 production에서 차단됨.
+    return _require_stub()
 
 
 def _domain_of(email: str) -> str:

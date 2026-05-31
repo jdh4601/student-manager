@@ -33,9 +33,16 @@ services:
         value: "60"
       - key: AUTH_LINK_DELIVERY
         value: stub
-      # Teacher Google OAuth (REQ-001). Demo defaults to stub; set real creds in dashboard.
+      # production에서는 stub OAuth(인증 우회)를 코드 레벨에서 차단한다.
+      - key: ENVIRONMENT
+        value: production
+      # Teacher Google OAuth (REQ-001). "auto" → real once GOOGLE_CLIENT_ID is set.
+      # 자격증명 미설정 시 OAuth 로그인은 503 (password 로그인은 정상). 안전한 기본값.
       - key: OAUTH_PROVIDER
-        value: stub  # "auto"/"real" once GOOGLE_CLIENT_ID is set
+        value: auto
+      # ⚠️ 데모 한정: 실 OAuth 없이 stub를 켜려면 의식적으로 true. 인증 우회 위험 인지 후 사용.
+      - key: ALLOW_OAUTH_STUB
+        value: "false"
       - key: ALLOWED_TEACHER_DOMAINS
         sync: false  # CSV e.g. "snu.ac.kr,example.edu"
       - key: OAUTH_DEFAULT_SCHOOL_ID
