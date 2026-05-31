@@ -16,6 +16,17 @@
 - **솔루션 한 줄**: SaaS형 학생 관리 + 이벤트 기반 실시간 분석 + PII-안전 AI 비서.
 - **규모를 먼저 못박는다**(이후 모든 결정의 근거): 고QPS·대용량 스트리밍 도메인이 *아니다*.
 
+🖼️ **추천 도식 — Before/After 통합도**: 흩어진 4개 도구가 한 SaaS로 수렴하는 그림. "왜 만들었나"를 한 컷에.
+```mermaid
+flowchart LR
+  E["엑셀 · 성적"] --> Pain
+  D["문서 · 피드백"] --> Pain
+  K["카톡 · 알림"] --> Pain
+  P["지필 · 상담"] --> Pain
+  Pain["😵 학생 1명 분석 8~12분<br/>학부모는 학기말까지 접근 불가"]
+  Pain ==통합==> SM["✅ Student Manager<br/>1개 SaaS · 실시간 분석 · PII-안전 AI"]
+```
+
 ---
 
 ## 1. 기술 스택 선택 & 이유 (2분)
@@ -32,6 +43,26 @@
 | LLM | **OpenAI 호환 SDK 단일** | provider별 SDK | `LLM_BASE_URL`만 교체 + 전송 전 PII 마스킹 |
 
 > **관통 원칙**: 컴포넌트 수를 늘리지 않는다 — 새 인프라마다 secret·모니터링·장애 표면 증가 → 규모가 정당화할 때까지 보류(YAGNI).
+
+🖼️ **추천 도식 — 계층 스택도**: FE / BE(단일 언어) / 데이터(단일 엔진) 3계층. 외부 의존성이 LLM 1곳뿐임을 시각적으로 강조.
+```mermaid
+flowchart TB
+  subgraph FE["프론트엔드"]
+    R["React 18 + Vite + TS"]
+    Q["TanStack Query + Recharts"]
+  end
+  subgraph BE["백엔드 · 단일 언어(Python)"]
+    A["FastAPI async + Pydantic"]
+    W["outbox-publisher / analytics-worker"]
+  end
+  subgraph DATA["데이터 · 단일 엔진"]
+    PG[("PostgreSQL<br/>OLTP + OLAP + CDC + 메시지")]
+  end
+  R --> A
+  A --> PG
+  W --> PG
+  A -.->|"전송 전 PII 마스킹"| LLM["OpenAI 호환 LLM<br/>(유일한 외부 의존성)"]
+```
 
 ---
 
@@ -55,6 +86,18 @@
 - **수평 확장**: `--scale analytics-worker=3` — N 워커가 동일 NOTIFY를 받아도 SKIP LOCKED로 1개만 처리 = **Kafka consumer group 등가** (Sidekiq·oban 패턴). → §9 라이브 로그.
 - **단일 병목**: Postgres 단일 인스턴스가 OLTP+OLAP+outbox+NOTIFY 공존. 평가 규모(수천 row)에선 무시 가능, 평가 후 read replica/외부 broker (Architecture §5·§6).
 
+🖼️ **추천 도식 — 이벤트 흐름도(위 ASCII의 렌더 버전)**: "같은 TX" 경계와 catch-up 폴링 점선이 핵심. 이벤트 유실 0을 한눈에.
+```mermaid
+flowchart LR
+  FE["React (Vercel)"] -->|HTTPS| API["FastAPI (Render)"]
+  API -->|"grade UPSERT + outbox INSERT<br/>(같은 트랜잭션)"| PG[("Postgres<br/>public · analytics · outbox")]
+  PG -->|"pg_notify (4채널)"| PUB["outbox-publisher"]
+  PUB -->|NOTIFY| W["analytics-worker ×N"]
+  W -->|"SKIP LOCKED claim + UPSERT"| AGG[("analytics.agg_*")]
+  AGG --> DASH["대시보드 / 챗봇"]
+  PG -.->|"catch-up 폴링 60s<br/>(NOTIFY 유실 시 잔여 처리)"| W
+```
+
 ---
 
 ## 3. API 명세 & Swagger (1분)
@@ -65,6 +108,16 @@
 - 에러 계약: 모든 비즈니스 에러는 `{ detail, code }` (AppException) — `code`는 머신 판독용.
 - **슬라이드**: 라이브 `/docs` 1컷. (Architecture §4.6)
 
+🖼️ **추천 도식 — 계약 우선 파이프라인**: 하나의 Pydantic 스키마가 문서·클라이언트·FE 타입으로 갈라져 나가는 단방향 흐름.
+```mermaid
+flowchart LR
+  PD["Pydantic 스키마<br/>(단일 진실 공급원)"] --> OAS["OpenAPI 3.1<br/>(자동 생성)"]
+  OAS --> SW["/docs · /redoc<br/>대화형 문서"]
+  OAS --> FT["FE 타입 일치"]
+  OAS --> EXP["export_openapi.py<br/>53 paths / 53 schemas"]
+  EXP --> PM["Postman 임포트 · 클라이언트 생성"]
+```
+
 ---
 
 ## 4. UML / ERD (1.5분)
@@ -73,6 +126,39 @@
 - **시퀀스 (핵심 1개)**: 성적 입력 → outbox(같은 TX) → publisher NOTIFY → worker SKIP LOCKED → analytics UPSERT. (인증 시퀀스는 축약)
 - **ERD 핵심**: School → User/Class → Student → Grade/Attendance/Feedback/Counseling. 멀티테넌트는 모든 테이블 `school_id` 격리. (Design Spec §2)
 - **용어 정밀화**: User/Student 분리 = 3정규형이 아니라 **역할별 서브타입 분리**(NULL 방지). 삭제 정책은 soft-delete(`is_active`/보존) 기준으로 통일.
+
+🖼️ **추천 도식 1 — ERD 핵심(멀티테넌트 격리)**: School을 루트로 모든 테이블에 `school_id`가 흐르는 구조. 격리 경계를 색/루트로 강조.
+```mermaid
+erDiagram
+  School ||--o{ User : "보유"
+  School ||--o{ Class : "보유"
+  Class  ||--o{ Student : "소속"
+  Student ||--o{ Grade : ""
+  Student ||--o{ Attendance : ""
+  Student ||--o{ Feedback : ""
+  Student ||--o{ Counseling : ""
+  School { int id PK }
+  User { int id PK }
+  Class { int id PK }
+  Student { int id PK }
+```
+
+🖼️ **추천 도식 2 — 핵심 시퀀스(성적 입력 → 분석 갱신)**: §2 흐름을 시간축으로. "같은 TX"와 "<1초 갱신"이 메시지.
+```mermaid
+sequenceDiagram
+  participant T as 교사
+  participant API as FastAPI
+  participant PG as Postgres
+  participant PUB as publisher
+  participant W as worker
+  T->>API: 성적 입력
+  API->>PG: grade UPSERT + outbox INSERT (같은 TX)
+  PG-->>PUB: NOTIFY(event_id)
+  PUB->>W: 이벤트 전달
+  W->>PG: SKIP LOCKED claim
+  W->>PG: analytics.agg_* UPSERT
+  PG-->>T: 대시보드 갱신 (<1초)
+```
 
 ---
 
@@ -88,6 +174,31 @@
   - stub **우회 차단**: production에서 stub 호출 시 503 `AUTH_OAUTH_NOT_CONFIGURED`.
 - **데이터 보호**: bcrypt(cost≥12), 학생 PII 로그 masking, LLM엔 토큰(`학생A`)+k≥5 익명성. (Architecture §4.5·§7)
 
+🖼️ **추천 도식 1 — 교사 OAuth 시퀀스**: state 쿠키 바인딩 → 도메인 게이트까지. CSRF 방어 지점을 화살표로 짚기.
+```mermaid
+sequenceDiagram
+  participant T as 교사
+  participant API as FastAPI
+  participant G as Google
+  T->>API: GET /login
+  API-->>T: state 쿠키 발급 (HttpOnly)
+  T->>G: 로그인 + 동의
+  G-->>API: GET /callback (code, state)
+  API->>API: state 검증 (secrets.compare_digest)
+  API->>G: code → token → userinfo
+  API->>API: email_verified + 학교 도메인 화이트리스트
+  API-->>T: 교사 계정 발급 (JWT access/refresh)
+```
+
+🖼️ **추천 도식 2 — RBAC 3계층 게이트**: 요청이 세 관문을 통과해야 데이터에 닿는 구조. "every query" 강조.
+```mermaid
+flowchart LR
+  REQ["요청 + JWT"] --> M["① JWT 미들웨어<br/>role + school_id 추출"]
+  M --> RT["② 라우터<br/>역할 화이트리스트"]
+  RT --> SVC["③ 서비스 row-scope<br/>Class.teacher_id = 나"]
+  SVC --> DB[("스코프된 쿼리")]
+```
+
 ---
 
 ## 6. 테스트 (1.5분)
@@ -102,6 +213,15 @@
 - **메시지**: "테스트 통과 한 줄"이 아니라 **3계층이 각기 다른 실패를 잡는다** — 단위=로직, 통합=컴포넌트 계약, E2E=사용자 경험.
 - sanitizer·grade_calculator 100% coverage. (`docs/notes/test-pyramid-presentation.md`)
 - **정직성**: frontend 단위테스트는 호스트 환경(Node 25≠vitest 1.6 + Linux node_modules)으로 일시 보류 → **원인 규명+해결책 보유**로 프레이밍. E2E가 frontend를 실 브라우저로 검증.
+
+🖼️ **추천 도식 — 테스트 피라미드(층별로 다른 실패를 잡는다)**: 위 ASCII의 렌더 버전. 너비=양, 라벨=각 층이 잡는 실패 종류.
+```mermaid
+flowchart TB
+  E2E["🔺 E2E · Playwright 11 spec<br/>= 사용자 경험 실패"]
+  INT["🔷 통합 · testcontainers 실 Postgres<br/>= 컴포넌트 계약 실패 (scale=3, 중복 0)"]
+  UNIT["🟦 단위 · 200 passed / 커버리지 81%<br/>= 로직 실패 (계산·권한·격리·sanitizer·OAuth)"]
+  E2E --> INT --> UNIT
+```
 
 ---
 
@@ -119,6 +239,21 @@
 - **K8s 재프레이밍**(교수 심기 관리): "K8s·Argo·무중단은 대규모 표준. 핵심 개념(헬스체크 무중단·선언적 배포·수평확장)은 충족했고, 풀 클러스터는 사용자 0명 환경에 과한 비용이라 **의도적 제외** — 도입 트리거는 §10·ADR에 명시." → 부정이 아니라 **등가+트레이드오프**.
 - **왜 Render+Vercel?** LISTEN worker는 영속 연결 필요 → 순수 서버리스 부적합. web+worker+managed PG를 `render.yaml` 하나로 선언. **왜 AWS 아닌가?** 이 규모에 ECS+RDS+ALB+NAT GW는 비용·운영 과중.
 - **운영 현실 메모**: Render free Postgres는 생성 30일 후 만료 → 라이브 유지 시 유료 전환 필요. (`docs/notes/zero-downtime-deployment.md`)
+
+🖼️ **추천 도식 — CI/CD 파이프라인 + 무중단 게이트**: push→게이트→배포 본류에, readiness 통과 후에만 트래픽이 붙는 서브그래프를 곁들여 "가용 용량 0 구간 없음"을 시각화.
+```mermaid
+flowchart LR
+  PUSH["main push"] --> CI{"테스트 게이트<br/>ruff + pytest + tsc"}
+  CI -->|실패| STOP["배포 차단"]
+  CI -->|통과| DEP["자동 배포"]
+  DEP --> V["Vercel · FE"]
+  DEP --> R["Render · API + publisher + worker + PG"]
+  subgraph ROLL["롤링 배포 (무중단)"]
+    NEW["신 인스턴스"] -->|"/ready: SELECT 1 통과"| TR["트래픽 수신"]
+    OLD["구 인스턴스"] -.->|"통과 후에만 종료"| TR
+  end
+  R --> ROLL
+```
 
 ---
 
@@ -142,6 +277,20 @@
 
 > **메타 교훈**: 결정을 **번복하고 그 근거를 ADR로 남긴 것** 자체가 핵심 — right-sizing · YAGNI · 되돌릴 수 있는 결정의 가치. (이 서사는 Jira 스프린트 위 백로그 재계획으로도 추적 — `docs/notes/agile-jira-presentation.md`)
 
+🖼️ **추천 도식 — ADR-002 → ADR-003 전환도**: 두 버전을 나란히 두고 "Outbox는 보존, 메시지 채널만 교체"를 색으로 구분. 발표 하이라이트 슬라이드.
+```mermaid
+flowchart LR
+  subgraph V1["ADR-002 (5/3) · 구현·통합테스트 완료"]
+    OB1["Outbox"] --> KAFKA["Kafka KRaft<br/>+ aiokafka"]
+    KAFKA --> WK1["worker"]
+  end
+  subgraph V2["ADR-003 (5/23) · 최종 채택"]
+    OB2["Outbox (보존)"] --> NOTIFY["LISTEN/NOTIFY<br/>+ SKIP LOCKED"]
+    NOTIFY --> WK2["worker ×N<br/>= consumer group 등가"]
+  end
+  V1 ==>|"right-sizing · YAGNI — 메시지 채널만 교체"| V2
+```
+
 ---
 
 ## 9. 데모 시연 (10분)
@@ -159,6 +308,18 @@
 | 6 | 1명 반에서 같은 질문 | k<5 거부 |
 | 7 | E2E 1개 라이브 | `playwright test landing-login-grade` |
 | 8 | Swagger `/docs` | 계약 우선 1컷 |
+
+🖼️ **추천 도식 — 데모 시연 플로우**: 8단계를 한 줄 타임라인으로. 발표자·청중이 "지금 몇 번째"인지 따라오게 하는 내비게이션 슬라이드.
+```mermaid
+flowchart LR
+  D0["0 · 교사 OAuth<br/>도메인 게이트"] --> D1["1 · 대시보드<br/>30명 즉시 분석"]
+  D1 --> D2["2 · 성적 1건 입력<br/>outbox commit"]
+  D2 --> D3["3 · 위젯 자동 갱신<br/>&lt;1초"]
+  D3 --> D4["4 · make demo-scale<br/>worker 3개 분산"]
+  D4 --> D5["5 · AI 비서<br/>이름=토큰"]
+  D5 --> D6["6 · 1명 반 질문<br/>k&lt;5 거부"]
+  D6 --> D7["7~8 · E2E + Swagger"]
+```
 
 **다음 단계**: 학부모 모바일 알림(FCM) · OCR 자동채점 · LLM 응답 캐시 · (인프라) 확장 트리거 시 read replica/외부 broker (Architecture §10).
 
