@@ -1,11 +1,13 @@
 # 발표 아웃라인 — Student Manager v2.2
 
-**연관**: SMS-71 / Architecture v1.2 / ADR-002·003 / Phase 8
+**연관**: SMS-71 / Architecture v1.3 / ADR-002·003 / Phase 8
 **구성**: 발표 15분 + 라이브 시연 10분
 **발표 관점**: "기술 스택·아키텍처를 *왜* 이렇게 선택했는가"가 중심. 모든 결정은 하나의 메시지로 수렴 →
 **도메인 규모(학교당 500명·성적 30k row, 분석은 학급 30명 단위)에 맞춘 right-sizing.**
 
-> 깊은 근거는 `docs/architecture.md`(v1.2), `docs/decisions/002·003`을 Q&A 백업으로 둔다.
+> 깊은 근거는 `docs/architecture.md`(v1.3), `docs/decisions/002·003`을 Q&A 백업으로 둔다.
+
+> **발표 보완 5종(커리큘럼 축 정렬)은 §12에 모음**: ① OpenAPI/Swagger · ② 테스트 피라미드 · ③ 무중단 배포 · ④ Agile/Jira · ⑤ 교사 OAuth. 본 아웃라인 본문(§1~11)은 "왜 이 아키텍처인가"를, §12는 "수업 커리큘럼 축을 어떻게 충족했는가"를 다룬다.
 
 ---
 
@@ -130,6 +132,8 @@
 
 - **운영 현실 메모 (배포도 의사결정이다)**: Render free Postgres는 **생성 30일 후 만료**. 라이브 데모를 유지하려면 DB를 유료($7/mo)로 전환해야 한다 → *무료 티어의 수명*도 배포 설계의 일부로 명시.
 
+- **무중단 배포 (③, 수업 커리큘럼 정렬)**: liveness(`/health`, 프로세스 생존) ≠ readiness(`/ready`, `SELECT 1` DB 검증 → 503 `DB_NOT_READY`)를 **분리**. 롤링 시 신 인스턴스가 `/ready` 통과 후에만 트래픽 수신 → 가용 용량 0 구간 없음. Render는 `healthCheckPath`, 예시 K8s(`deploy/k8s/`, `RollingUpdate maxUnavailable=0`)는 readinessProbe로 동일 의미론. K8s 재프레이밍 스크립트·시퀀스는 §12-③ / `docs/notes/zero-downtime-deployment.md`.
+
 - **롤백**: 로컬 `docker-compose down -v && make up`; 클라우드 Render 1-click redeploy. 마이그레이션은 평가 종료까지 forward-only.
 
 ---
@@ -144,6 +148,7 @@
 
 - **RBAC 3계층**: JWT 미들웨어(role + school_id 추출) → 라우터 역할 화이트리스트 → 서비스 row-level scope(`Class.teacher_id = current_user.id`)
 - **데이터 보호**: bcrypt(cost≥12), refresh=HttpOnly+SameSite=Strict, 학생 PII 로그 masking, LLM엔 **토큰만(`학생A`) + k≥5** 익명성 (Architecture §7).
+- **계정 발급 완결 (⑤)**: 학생·학부모=초대 링크 / **교사=Google OAuth + 학교 도메인 화이트리스트**. OAuth는 인증 진입점만 추가하고 인가는 위 RBAC 3계층으로 일원화. state CSRF 방어·stub production 차단은 §12-⑤.
 
 ---
 
@@ -153,18 +158,22 @@
 
 | # | 시연 | 강조 |
 |---|------|------|
+| 0 | **교사 Google OAuth 로그인** (⑤) | 학교 도메인 화이트리스트 → 교사 권한 발급. 비허용 도메인 차단 1컷 |
 | 1 | 교사 로그인 → 대시보드 | 30명 학급의 평균/분포가 즉시 보임 |
 | 2 | 성적 1건 입력 | Outbox commit (운영 변경과 같은 TX) |
 | 3 | 분석 위젯 자동 갱신 | < 1초 (REQ-074) |
 | 4 | `make demo-scale` | worker 3개 SKIP LOCKED 분산 처리 로그 |
 | 5 | AI 비서에 "이 반 영어 평균은?" | 답변, 학생명은 토큰으로만 |
 | 6 | 1명만 있는 반에서 같은 질문 | k<5 거부 메시지 |
+| 7 | **E2E 1개 라이브** (②) | `npx playwright test landing-login-grade` — 실 브라우저 검증 |
+| 8 | **Swagger `/docs`** (①) | 계약 우선 — Pydantic 스키마 = 단일 진실 공급원 |
 
 ## 10. 정량 결과 (1분)
 
 - REQ-074 SLA(분석 반영 ≤60s) — `docs/notes/analytics-sla-baseline.md`
-- 16개 회귀 테스트(analytics, chat, ratelimit) + 5개 E2E 시나리오
-- 백엔드 176 passed / sanitizer 100% coverage
+- **테스트 피라미드 (②, 실측 2026-05-31)**: 단위 **200 passed / 백엔드 커버리지 81%** + 통합(testcontainers 실 Postgres) + **E2E Playwright 11 spec**. sanitizer·grade_calculator 100% coverage.
+- **API 명세 (①)**: OpenAPI 3.1 자동 + `scripts/export_openapi.py` → 53 paths / 53 schemas (`docs/api/openapi.json`)
+- (계층별 상세·발표 서사는 §12-②, `docs/notes/test-pyramid-presentation.md`)
 
 ## 11. 다음 단계 (1분)
 
@@ -172,6 +181,48 @@
 - 교과서/시험지 OCR → 자동 채점
 - LLM 응답 캐시 + 비용 모니터링
 - (인프라) 확장 트리거 도달 시 read replica / 외부 broker / 클라우드 재평가 — Architecture §10
+
+---
+
+## 12. 발표 보완 5종 — 수업 커리큘럼 축 정렬 (4~5분, 신설)
+
+> 수업 커리큘럼 = 루브릭. 그 축(요구사항→UML→개발→**API 명세**→정적분석→**테스트(unit→integration→E2E)**→**배포(무중단)**→QA→AWS→**Agile**)에 정면 정렬한다. 통합 계획·진척은 `docs/notes/final-presentation-improvement-plan.md`.
+
+### ① OpenAPI / Swagger — 계약 우선(contract-first)
+- **메시지**: "Pydantic 스키마 = 단일 진실 공급원 → Swagger 자동생성 → FE 타입 일치". API를 계약으로 합의.
+- FastAPI OpenAPI 3.1 자동 + `app/main.py` `tags_metadata`(14 그룹 설명)·license·contact. 대화형 문서 `/docs`(Swagger) · `/redoc`.
+- `scripts/export_openapi.py` → `docs/api/openapi.json` (**53 paths / 53 schemas**) — Postman 임포트·클라이언트 생성용.
+- **슬라이드**: 라이브 `/docs` 1컷 + contract-first 다이어그램. (Architecture §4.6)
+
+### ② 테스트 피라미드 (unit → integration → E2E)
+- **메시지**: "테스트 통과 한 줄"이 아니라 **3계층이 각기 다른 실패를 잡는다** + 백엔드 81% 커버리지로 뒷받침.
+
+```
+        ╱╲         E2E  : Playwright 11 spec (실 브라우저 사용자 플로우)
+       ╱──╲        통합 : testcontainers 실 Postgres (outbox→analytics 정합성, scale=3 중복 0)
+      ╱────╲       단위 : 200 passed / 커버리지 81% (계산·권한·격리·sanitizer·OAuth 게이트)
+     ╱──────╲
+```
+- **정직성 슬라이드**: frontend 단위테스트는 호스트 환경(Node 25≠vitest 1.6 + Linux node_modules)으로 일시 보류 → **원인 규명+해결책 보유**로 프레이밍(디버깅 역량 증거). E2E가 frontend를 실 브라우저로 검증. (`docs/notes/test-pyramid-presentation.md`, `frontend-test-env-fix.md`)
+- **PRD "E2E 미작성"은 stale → 정정**.
+
+### ③ 무중단 배포 (Argo CD / K8s 재프레이밍)
+- **재프레이밍 (교수 심기 관리)**: "K8s·Argo·무중단은 대규모 운영의 표준. 저희는 그 **핵심 개념**(헬스체크 무중단 전환·선언적 배포·수평 확장)을 평가 규모에 맞는 형태로 구현 — 무중단=`/ready` readiness 게이트, 선언적 배포=`render.yaml`+GitHub Actions GitOps, 수평 확장=SKIP LOCKED. 풀 클러스터는 사용자 0명 환경에 과한 비용이라 의도적 제외, 도입 트리거는 ADR·§10에 명시."
+- **핵심**: 부정("필요 없다")이 아니라 **등가+트레이드오프**.
+- liveness `/health` ≠ readiness `/ready`(`SELECT 1`→503 `DB_NOT_READY`) 분리. 예시 K8s `deploy/k8s/`(`maxUnavailable=0`+probe). 롤링 시퀀스·Q&A는 `docs/notes/zero-downtime-deployment.md`. (Architecture §8.1)
+
+### ④ Agile / Jira
+- **메시지**: "워터폴이 아니라 애자일로 운영" — 백로그→스프린트→이슈, 요구사항(REQ-xxx)→Jira 에픽/스토리 추적성.
+- 하이라이트: **Kafka→LISTEN/NOTIFY 백로그 재계획**(ADR-002→003)을 스프린트 위에서 의사결정한 서사 = §5와 연결. 실제 보드(Project SMS, Board 2) 스크린샷.
+- 발표 산출물·14 스프린트 타임라인: `docs/notes/agile-jira-presentation.md`. **할 일: 보드 스크린샷 캡처**.
+
+### ⑤ 교사 인증 — Google OAuth + 학교 도메인 화이트리스트 (유일한 실질 신규 구현)
+- **메시지**: 중간발표 "가장 큰 문제(계정 발급)"의 교사 부분을 실제 해결 → 학생=초대 / 교사=OAuth로 **완결**.
+- 흐름: `GET /auth/oauth/google/login`(state 쿠키 발급) → Google 동의 → `/callback`(state 검증→token→userinfo→도메인 게이트→교사 발급). (Architecture §4.5)
+- **보안 강점 2가지 (자동 보안리뷰로 발견·수정 → 발표 자산화)**:
+  - **state CSRF 방어**: HttpOnly 쿠키 바인딩 + `secrets.compare_digest` → `AUTH_OAUTH_STATE_MISMATCH`
+  - **stub 우회 차단**: production에서 stub 호출 시 503 `AUTH_OAUTH_NOT_CONFIGURED` (인증 우회 불가)
+- TDD: `backend/tests/test_oauth.py` 8 cases (도메인 허용/거부·state·중복·prod 가드). 데모는 stub 모드로 Google 등록 없이 가능.
 
 ---
 
@@ -186,6 +237,10 @@
 | 왜 처음부터 LISTEN/NOTIFY를 안 했나? | 처음엔 rubric 문구상 Kafka가 가점에 안전해 보였다. 재해석 후 핵심이 'event-driven 구조'임을 확인, 규모를 보고 전환 (이 솔직함이 강점) |
 | 왜 AWS가 아니라 Render인가? | 같은 right-sizing. 이 규모에 ECS+RDS+NAT GW는 비용·운영 과중. worker 영속 연결 때문에 순수 서버리스도 부적합 |
 | 운영 DB와 분석 DB를 왜 물리적으로 안 나눴나? | 평가 기준이 동일 DB 내 스키마 분리를 허용. `public`/`analytics` 스키마로 구분 + CDC로 OLTP/OLAP 워크로드 분리. 물리 분리는 규모가 정당화할 때(read replica/별도 인스턴스) |
+| K8s/Argo CD를 왜 안 썼나? | 핵심 개념은 충족(readiness 무중단·GitOps·SKIP LOCKED 수평확장). 사용자 0명 환경에 풀 클러스터는 과한 비용 → 의도적 제외, 도입 트리거는 §10 명시 (③) |
+| 무중단 배포를 어떻게 보장하나? | liveness/readiness 분리. 신 인스턴스 `/ready` 통과 후에만 트래픽 수신(`maxUnavailable=0`), DB 끊김 시 재시작 아닌 트래픽 제외 (③) |
+| 테스트는 충분한가? | 3계층 피라미드: 단위 200/커버리지 81% + 통합 testcontainers + E2E 11. 각 계층이 다른 실패를 잡음 (②) |
+| OAuth state를 검증하나? (CSRF) | 발급 state를 HttpOnly 쿠키에 바인딩 후 `compare_digest`로 비교. 불일치 400. stub은 production에서 503으로 차단 (⑤) |
 
 ---
 
