@@ -68,6 +68,10 @@ class RealGoogleOAuthClient:
             "access_type": "online",
             "prompt": "select_account",
         }
+        # 허용 도메인이 단 하나면 hd 힌트로 계정 선택창을 해당 Workspace 도메인으로 좁힌다.
+        # 이는 UX 힌트일 뿐 — 실제 방어는 login_or_create_teacher의 서버측 도메인 게이트다.
+        if len(settings.allowed_teacher_domains) == 1:
+            params["hd"] = settings.allowed_teacher_domains[0]
         return f"{_GOOGLE_AUTH_URL}?{urlencode(params)}"
 
     async def exchange_code(self, code: str) -> OAuthProfile:

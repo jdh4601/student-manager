@@ -146,3 +146,25 @@ async def test_existing_email_logs_in_without_duplicate(client: AsyncClient, see
             select(func.count()).select_from(User).where(User.email == "known@test.com")
         )
     assert count == 1  # 중복 생성 없음
+
+
+def test_real_authorize_url_adds_hd_for_single_allowed_domain(monkeypatch):
+    """단일 허용 도메인이면 authorize_url에 hd 힌트를 붙여 계정 선택창을 좁힌다."""
+    from app.services.oauth import RealGoogleOAuthClient
+
+    monkeypatch.setattr(settings, "google_client_id", "test-client-id")
+    monkeypatch.setattr(settings, "allowed_teacher_domains", ["inu.ac.kr"])
+    url = RealGoogleOAuthClient().authorize_url(state="xyz")
+    qs = parse_qs(urlparse(url).query)
+    assert qs["hd"][0] == "inu.ac.kr"
+
+
+def test_real_authorize_url_omits_hd_for_multiple_domains(monkeypatch):
+    """허용 도메인이 여러 개면 단일 hd로 좁힐 수 없으므로 생략 (서버 게이트가 방어)."""
+    from app.services.oauth import RealGoogleOAuthClient
+
+    monkeypatch.setattr(settings, "google_client_id", "test-client-id")
+    monkeypatch.setattr(settings, "allowed_teacher_domains", ["a.edu", "b.edu"])
+    url = RealGoogleOAuthClient().authorize_url(state="xyz")
+    qs = parse_qs(urlparse(url).query)
+    assert "hd" not in qs

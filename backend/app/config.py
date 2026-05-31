@@ -85,7 +85,9 @@ class Settings(BaseSettings):
             return [d.strip().lower() for d in v.split(",") if d.strip()]
         return v
 
-    model_config = {"env_file": ".env"}
+    # extra="ignore": .env는 docker-entrypoint와 공유되어 Settings 필드가 아닌 키
+    # (RUN_SEED 등)를 포함할 수 있다. forbid면 그런 키가 부팅을 깨뜨린다.
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 settings = Settings()
