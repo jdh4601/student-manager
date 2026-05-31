@@ -1,8 +1,9 @@
 # System Architecture — Student Manager
 
-**버전**: 1.2 (ADR-003 — Kafka 제거, LISTEN/NOTIFY 채택)
-**작성일**: 2026-05-23
-**기반 문서**: PRD v2.1, Design Spec v2.1, ADR-001 (재작성), ~~ADR-002 (Outbox + Kafka)~~ → **ADR-003** (Outbox + Postgres LISTEN/NOTIFY + SKIP LOCKED)
+**버전**: 1.3 (발표 보완 — 교사 OAuth, 무중단 배포 probe, OpenAPI 명세)
+**작성일**: 2026-05-31 (v1.2 → 2026-05-23)
+**기반 문서**: PRD v2.2, Design Spec v2.1, ADR-001 (재작성), ~~ADR-002 (Outbox + Kafka)~~ → **ADR-003** (Outbox + Postgres LISTEN/NOTIFY + SKIP LOCKED)
+**v1.3 변경**: 교사 Google OAuth 흐름(§4.5, §7.2) · 무중단 배포 liveness/readiness probe + 예시 K8s 매니페스트(§8) · OpenAPI 명세 산출(§4.6)
 **프로젝트 성격**: 졸업 평가용 프로토타입 (Render + Vercel 클라우드 배포 + 로컬 docker-compose). 운영 사용자 0명. 평가 마감 2026-07-03 / 라이브 데모 + 발표.
 
 ---
@@ -211,6 +212,46 @@ Teacher                fastapi-api : routers/chat.py     analytics 스키마    
 | analytics-worker | Postgres `analytics.dead_letter_event` | SQL INSERT (poison message + outbox_event_id) | raw bytes + error | only after `OUTBOX_MAX_RETRIES` (기본 3) |
 | Browser | fastapi-api `/chat` | HTTP REST | { thread_id, message } | p95 ≤ 3s |
 | fastapi-api | LLM Provider | HTTPS | masked context + prompt | timeout 10s |
+| Browser | fastapi-api `/auth/oauth/google/*` | HTTP REST | authorize_url / { code, state } | p95 ≤ 500ms |
+| fastapi-api | Google OAuth/OIDC | HTTPS | code→token, userinfo | timeout 10s |
+
+### 4.5 교사 Google OAuth 흐름 (v1.3, REQ-006)
+
+```
+Teacher Browser          fastapi-api : routers/auth.py        Google OAuth/OIDC
+   │ GET /auth/oauth/google/login    │                              │
+   ├────────────────────────────────►│ secrets.token → state        │
+   │                                 │ Set-Cookie: oauth_state       │
+   │                                 │   (HttpOnly, SameSite=lax,600s)│
+   │ ◄── { authorize_url } ──────────┤                              │
+   │ window.location = authorize_url │                              │
+   ├────────────────────────────────┼─────────────────────────────►│ 사용자 동의
+   │ ◄── redirect ?code=&state= ─────┼──────────────────────────────┤
+   │ GET /auth/oauth/google/callback?code=&state=                   │
+   ├────────────────────────────────►│ 1. state ↔ 쿠키 compare_digest│
+   │                                 │    불일치 → 400 STATE_MISMATCH │
+   │                                 │ 2. delete oauth_state cookie  │
+   │                                 │ 3. code→token→userinfo        │
+   │                                 ├──────────────────────────────►│
+   │                                 │ ◄── { email, email_verified } ┤
+   │                                 │ 4. email_verified 가드        │
+   │                                 │ 5. 도메인 화이트리스트 게이트  │
+   │                                 │    미허용 → 403 DOMAIN_NOT_ALLOWED
+   │                                 │ 6. 기존 교사 로그인 / 신규 생성 │
+   │                                 │    (oauth_default_school_id)   │
+   │ ◄── TokenResponse (JWT) ────────┤                              │
+```
+
+**보안 결정**:
+- **state CSRF 방어**: 발급한 state를 HttpOnly 쿠키에 바인딩, 콜백에서 `secrets.compare_digest`로 비교 (타이밍 공격 무력화). 불일치/누락 → `AUTH_OAUTH_STATE_MISMATCH` 400
+- **stub provider 우회 차단**: `OAUTH_PROVIDER=auto`는 `GOOGLE_CLIENT_ID` 설정 시 real, 아니면 stub. stub은 `ENVIRONMENT≠production` 또는 `ALLOW_OAUTH_STUB=true`에서만 동작 — production에서 stub 호출 시 503 `AUTH_OAUTH_NOT_CONFIGURED`로 토큰 발급 거부
+- **DI 패턴**: `GoogleOAuthClient` Protocol + `StubGoogleOAuthClient`/`RealGoogleOAuthClient` (LLM 클라이언트와 동일한 의도적 진화). 테스트는 stub으로 결정론적 검증 (`backend/tests/test_oauth.py` 8 cases)
+
+### 4.6 API 명세 산출 (v1.3)
+
+- FastAPI OpenAPI 3.1 자동 생성 + `tags_metadata`(14 그룹 설명)·license·contact 메타데이터 (`app/main.py`)
+- 대화형 문서: Swagger UI `/docs`, ReDoc `/redoc`
+- `scripts/export_openapi.py`가 `app.openapi()`를 `docs/api/openapi.json`으로 덤프 (53 paths / 53 schemas) — Postman 임포트·클라이언트 코드 생성용
 
 ---
 
@@ -308,6 +349,8 @@ Teacher                fastapi-api : routers/chat.py     analytics 스키마    
 2. 라우터 단계: 역할 화이트리스트 (`require_role(["teacher"])`)
 3. 서비스 단계: row-level scope (`Class.teacher_id = current_user.id`)
 
+> 교사 OAuth(REQ-006)로 발급된 JWT도 동일 RBAC 경로를 통과한다. OAuth는 **인증(authentication) 진입점**만 추가할 뿐, 인가(authorization) 경계는 위 3단계로 일원화 — 도메인 화이트리스트는 교사 계정 발급 시점의 게이트다 (§4.5).
+
 ---
 
 ## 8. 배포 / 실행 (Deployment Topology)
@@ -341,6 +384,25 @@ make demo-scale          # docker-compose up --scale analytics-worker=3
 
 **롤백**: 로컬은 `docker-compose down -v && make up`. 클라우드는 Render 이전 배포로 redeploy (Render dashboard 1-click). DB 마이그레이션은 평가 종료까지 forward-only.
 
+### 8.1 무중단 배포 (Zero-Downtime, v1.3)
+
+배포 중 503/끊김 없이 신버전으로 전환하기 위한 **헬스 게이트**를 구현했다.
+
+| Probe | 엔드포인트 | 검증 | 실패 시 |
+|-------|-----------|------|---------|
+| **Liveness** | `GET /health` | 프로세스 생존 (즉시 200) | 컨테이너 재시작 |
+| **Readiness** | `GET /ready` | `SELECT 1`로 DB 연결 확인 | 503 `DB_NOT_READY` → 트래픽 차단 (재시작 아님) |
+
+핵심: **liveness ≠ readiness**. DB가 잠시 끊겨도 프로세스는 살아있으므로(liveness OK) 재시작하지 않고, readiness만 실패시켜 트래픽에서 일시 제외 → 복구 시 자동 재합류. 부팅 중 DB 미준비 상태에서 트래픽 수신을 막는다.
+
+**롤링 시퀀스** (Render 자동 / 예시 K8s 동일 의미론):
+```
+신버전 Pod 기동 → /ready 통과 대기 → LB에 합류 → 구버전 트래픽 드레인 → 구버전 종료
+```
+- `deploy/k8s/backend-deployment.yaml`: `RollingUpdate maxUnavailable=0, maxSurge=1` + liveness/readiness probe (신 Pod ready 전까지 구 Pod 유지 → 가용 용량 0 구간 없음)
+- `deploy/k8s/analytics-worker-deployment.yaml`: worker `replicas=3` (SKIP LOCKED 수평 확장 시연), publisher 단일
+- **예시 매니페스트의 위치**: 운영 K8s 클러스터는 평가 후 트랙. 본 yaml은 커리큘럼의 "무중단 배포·롤링 업데이트" 개념을 **probe 구현 + 의도된 토폴로지**로 입증하기 위한 산출물이며, 실제 demo는 Render 롤링 재배포로 동등 시연 (`docs/notes/zero-downtime-deployment.md`)
+
 ---
 
 ## 9. 마이그레이션 / 백필
@@ -367,7 +429,7 @@ make demo-scale          # docker-compose up --scale analytics-worker=3
 |------|--------|-----------|
 | Read replica 분리 | 운영 영향 발생 시 | Postgres physical replication + analytics routing |
 | 외부 message broker 도입 (Kafka/Redpanda/SQS) | NOTIFY backplane 한계 또는 cross-region 요구 | Debezium (outbox source) + 외부 broker |
-| OAuth / SSO | 학교 단위 도입 시 | Google Workspace / SAML |
+| ~~OAuth / SSO~~ → **교사 Google OAuth 구현됨 (v1.3, §4.5)**. 학생·학부모 SSO·SAML은 평가 후 | 학교 단위 확대 시 | Google Workspace / SAML |
 | Realtime 알림 | 30초 폴링이 부족할 때 | SSE / WebSocket |
 | 클라우드 배포 | 학교 운영 도입 시 | EKS·Fargate·Cloud Run 중 재평가 |
 | 캐싱 레이어 | 대시보드 쿼리 부하 | Redis |
@@ -396,4 +458,4 @@ make demo-scale          # docker-compose up --scale analytics-worker=3
 
 ---
 
-*Architecture v1.2 — Vercel/Render 클라우드 + 로컬 docker-compose + Outbox + Postgres LISTEN/NOTIFY 기반*
+*Architecture v1.3 — Vercel/Render 클라우드 + 로컬 docker-compose + Outbox + Postgres LISTEN/NOTIFY + 교사 OAuth + 무중단 배포 probe 기반*
