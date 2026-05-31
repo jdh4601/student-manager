@@ -58,6 +58,22 @@ export default function DashboardPage() {
     setStudentId('');
   }, [classId]);
 
+  // 첫 진입 시 분석 데이터를 바로 보여주기 위해 첫 학급을 자동 선택한다.
+  useEffect(() => {
+    if (classId) return;
+    const first = classesQuery.data?.[0];
+    if (first) setClassId(first.id);
+  }, [classesQuery.data, classId]);
+
+  // 학급 확정 후 과목이 로드되면 국어를 우선 선택(없으면 첫 과목)한다.
+  useEffect(() => {
+    if (subjectId) return;
+    const subjects = subjectsQuery.data;
+    if (!subjects || subjects.length === 0) return;
+    const preferred = subjects.find((s) => s.name === '국어') ?? subjects[0];
+    setSubjectId(preferred.id);
+  }, [subjectsQuery.data, subjectId]);
+
   const filteredStudents = (studentsQuery.data ?? []).filter((s) =>
     studentQuery.trim() === '' ? true : s.name.includes(studentQuery.trim()),
   );
