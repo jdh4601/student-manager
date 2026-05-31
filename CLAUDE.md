@@ -38,6 +38,13 @@ npm run e2e          # playwright
 
 ## 남은 작업
 
-- E2E 테스트 미작성: 상담·알림·import/export 플로우 (`frontend/e2e/`)
-- Frontend `npm test` hang 이슈 (현재 `qa`에서 제외)
+- Frontend `npm test` hang: 근본원인 규명 완료 (Node 25≠vitest 1.6 + node_modules가 Linux 바이너리). fix는 `docs/notes/frontend-test-env-fix.md` — Node 20 클린 재설치 필요. `test:run` 스크립트 추가됨 (watch 모드 분리)
 - SMTP 미연결: 초대·비밀번호 재설정이 `stub` 모드 (`AUTH_LINK_DELIVERY=stub`)
+- 교사 OAuth 실 모드: Google Cloud OAuth 클라이언트 등록 + `GOOGLE_CLIENT_ID/SECRET`·`ALLOWED_TEACHER_DOMAINS`·`OAUTH_DEFAULT_SCHOOL_ID` 설정 필요 (현재 stub은 비-production만 허용)
+
+> E2E 테스트는 작성 완료 (`frontend/e2e/` 11 spec). 백엔드 200 passed / 커버리지 81%.
+
+## 발표 보완 산출물 (docs/notes/)
+
+- `final-presentation-improvement-plan.md` — 5개 항목 통합 계획·진척
+- `agile-jira-presentation.md` (④) · `zero-downtime-deployment.md` (③) · `test-pyramid-presentation.md` (②) · `frontend-test-env-fix.md`

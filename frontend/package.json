@@ -9,6 +9,8 @@
     "preview": "vite preview",
     "e2e": "playwright test",
     "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit",
     "mcp:chrome": "chrome-devtools-mcp",
     "mcp:chrome:auto": "chrome-devtools-mcp --autoConnect",

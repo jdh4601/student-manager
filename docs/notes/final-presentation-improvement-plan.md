@@ -9,8 +9,10 @@
 - [x] **① OpenAPI/Swagger** — `main.py` 메타데이터 + `scripts/export_openapi.py` → `docs/api/openapi.json`
 - [x] **④ Agile/Jira** — `docs/notes/agile-jira-presentation.md` (14 스프린트 + 백로그 재계획 서사)
 - [x] **⑤ 교사 OAuth** — 백엔드 TDD(`test_oauth.py` 4 passed) + FE 종단(버튼·콜백 페이지·라우트) + render.yaml env. stub 모드 데모 가능
-- [ ] **② 테스트 피라미드** — npm test hang triage + 피라미드 슬라이드 (E2E 11개는 이미 존재)
-- [ ] **③ 배포/무중단** — `/ready` 이미 존재. healthcheck 분리·k8s yaml·재프레이밍 남음
+- [x] **② 테스트 피라미드** — 백엔드 200 passed/81% 커버리지 실측, npm hang 근본원인 규명+fix 문서, `test:run` 스크립트, 피라미드 발표 문서 (`test-pyramid-presentation.md`)
+- [x] **③ 배포/무중단** — k8s 매니페스트(시연용) + 재프레이밍 문서 (`zero-downtime-deployment.md`). `/ready`·healthcheck 기존 활용
+
+**5개 항목 전부 발표 시연 수준 완료.** 남은 건 너의 액션: Jira 보드 스크린샷, 슬라이드 시각화, (선택) frontend 단위테스트 Node 20 복구, 교사 OAuth 실 모드 Google 등록.
 
 ---
 
