@@ -401,19 +401,20 @@ flowchart LR
 
 ---
 
-## 부록 B. AI 비서 안전성 — "이 반 영어 평균은?" 한 문장 뒤
+## 부록 B. AI 비서 한 문장의 내부 흐름 — "이번 학기 2반의 평균 영어 점수를 알려줘"
 
-> "AI가 학생 개인정보를 외부로 보내지 않나?" 질문 대본. 코드: `chatStore.ts` → `routers/chat.py` → `services/*`.
+> 질문 한 문장이 백엔드에서 어떻게 처리되는지 step-by-step. 코드: `chatStore.ts` → `routers/chat.py` → `services/{chat_intent,chat_context,llm_client}.py`.
 
-1. **호출**: `POST /api/v1/chat` + access_token(메모리) Bearer.
-2. **레이트리밋**: 교사당 10회/분 → 429.
-3. **RBAC**: `require_role("teacher")` → role+school_id+user_id.
-4. **의도 분류**: "이번" → 최신 학기 룰 선택 (LLM tool calling 없이 비용 0).
-5. **컨텍스트**: `WHERE Class.teacher_id=나 AND school_id=내 학교` 담임 학급만. `analytics.agg_*`에서 2쿼리(N+1 회피).
-6. **PII 마스킹 + k≥5** ★: 5명 미만 → `SmallSampleError`로 LLM 호출 거부. 이름→`학생A`, 학번→`seq_001`, id/email/phone 삭제. `token_map`은 서버 메모리에만.
-7. **LLM 호출**: system(분석 지시+마스킹 JSON)+user(질문). 외부 페이로드에 식별정보 0건 — `test_llm_sanitizer.py`가 보증.
-8. **역매핑**: 응답의 `학생A` 토큰 → 실제 학생(`referenced_students[]`)으로 구조화.
+1. **FE 호출**: `chatStore`가 `POST /api/v1/chat` 호출. body `{ message: "이번 학기 2반의 평균 영어 점수를 알려줘", thread_id? }`, 헤더에 access_token(메모리) Bearer.
+2. **레이트리밋**: `@limiter.limit("10/minute", key_func=user_id_key)` — 교사당 분당 10회 초과 시 429.
+3. **인증·RBAC**: `require_role("teacher")` 의존성이 JWT를 풀어 `user(id, role, school_id)` 주입. 교사가 아니면 403.
+4. **의도 분류 (룰 기반, `resolve_semester_id`)**: 학기 목록을 `year DESC, term DESC`로 정렬 → 메시지에 **"이번"** 키워드 → 최신 학기 `semester_id` 선택. LLM tool calling 없이 비용·지연 0. ("2반"·"영어"는 여기서 파싱하지 않음 — 7번 참고.)
+5. **컨텍스트 조회 (`fetch_student_rows`)**: `WHERE Class.teacher_id = 나 AND User.school_id = 내 학교` — **담임 학급 학생만**. 학생 N명을 **전체 집계 1쿼리 + 과목별 집계 1쿼리 = 2쿼리**로 끝내 N+1 회피. 각 행 = `{ student_name, student_number, class_name, overall, subjects[과목명·평균·표본수] }`.
+6. **system prompt 구성**: 분석 지시문 + `[학급 통계]` JSON 직렬화를 system 메시지로, 교사 원문 질문을 user 메시지로.
+7. **LLM 호출 (`llm.complete`)**: OpenAI 호환 엔드포인트, timeout 10s / max_tokens 1024. **핵심**: "2반"·"영어" 필터링은 백엔드가 아니라 **LLM이 통계 JSON에서 추출** — `class_name == "2반"` 행들의 `subjects` 중 "영어" 평균을 골라 답한다.
+8. **응답 후처리**: 응답에서 학생 토큰을 스캔해 `referenced_students[]` 구성. **이번처럼 학급 평균(집계) 질문이면 개별 학생 지목이 없어 `referenced_students = []`** → "2반 영어 평균은 78.5점입니다" 형태의 숫자 답만.
+9. **반환·렌더**: `ChatResponse { thread_id, reply, referenced_students }` → FE 말풍선 렌더.
 
-**실패 분기**: 학생<5 → k≥5 거부 / OpenAI 타임아웃 → 504 `CHAT_TIMEOUT` / 업스트림 오류 → 502 `CHAT_UPSTREAM_ERROR` / 키 없음 → stub 폴백.
+**실패 분기**: OpenAI 타임아웃 → 504 `CHAT_TIMEOUT` / 업스트림 오류 → 502 `CHAT_UPSTREAM_ERROR` / 키 없음 → `StubLlmClient` 폴백.
 
-**발표 포인트**: 3중 안전장치(담임 학급 한정 + 토큰 치환 + k<5 거부), 역매핑은 서버 메모리에서만. 별도 AI 마이크로서비스 없이 FastAPI 단일 엔드포인트 = right-sizing.
+**발표 포인트**: 의도 분류는 룰(학기)로 비용 0, 데이터 접근은 **담임 학급으로 스코프 한정**, 집계는 2쿼리로 N+1 회피. 별도 AI 마이크로서비스 없이 FastAPI 단일 엔드포인트 = right-sizing.
