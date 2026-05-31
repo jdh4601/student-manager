@@ -5,6 +5,7 @@ import { SpeedInsights } from '@vercel/speed-insights/react';
 import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import SignupPage from './pages/SignupPage';
+import OAuthCallbackPage from './pages/OAuthCallbackPage';
 import LandingPage from './pages/LandingPage';
 import RootIndex from './pages/RootIndex';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -30,6 +31,7 @@ function App() {
       <Routes>
       <Route path="/" element={<RootIndex /> } />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/oauth/google/callback" element={<OAuthCallbackPage />} />
       {/* Role-aware notifications page for all authenticated users */}
       <Route
         path="/notifications"

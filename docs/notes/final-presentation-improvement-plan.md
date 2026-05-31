@@ -4,6 +4,14 @@
 **완성 깊이 기준**: "발표 시연 가능 수준" — 깊은 구현보다 **교수 커리큘럼 축 복구**가 목표
 **관련 문서**: `docs/prd.md`, `docs/architecture.md`, 중간발표 자료
 
+## 진척 (2026-05-31)
+
+- [x] **① OpenAPI/Swagger** — `main.py` 메타데이터 + `scripts/export_openapi.py` → `docs/api/openapi.json`
+- [x] **④ Agile/Jira** — `docs/notes/agile-jira-presentation.md` (14 스프린트 + 백로그 재계획 서사)
+- [x] **⑤ 교사 OAuth** — 백엔드 TDD(`test_oauth.py` 4 passed) + FE 종단(버튼·콜백 페이지·라우트) + render.yaml env. stub 모드 데모 가능
+- [ ] **② 테스트 피라미드** — npm test hang triage + 피라미드 슬라이드 (E2E 11개는 이미 존재)
+- [ ] **③ 배포/무중단** — `/ready` 이미 존재. healthcheck 분리·k8s yaml·재프레이밍 남음
+
 ---
 
 ## 0. 핵심 인식

@@ -33,6 +33,19 @@ services:
         value: "60"
       - key: AUTH_LINK_DELIVERY
         value: stub
+      # Teacher Google OAuth (REQ-001). Demo defaults to stub; set real creds in dashboard.
+      - key: OAUTH_PROVIDER
+        value: stub  # "auto"/"real" once GOOGLE_CLIENT_ID is set
+      - key: ALLOWED_TEACHER_DOMAINS
+        sync: false  # CSV e.g. "snu.ac.kr,example.edu"
+      - key: OAUTH_DEFAULT_SCHOOL_ID
+        sync: false  # UUID of school new OAuth teachers join (demo)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false  # <vercel-frontend-url>/auth/oauth/google/callback
       - key: RUN_SEED
         value: "1"
       - key: APP_BASE_URL

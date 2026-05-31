@@ -57,6 +57,24 @@ class Settings(BaseSettings):
     # "auto" picks OpenAI when key present, else stub. Set to "stub" to force stub.
     llm_provider: str = "auto"
 
+    # Teacher Google OAuth (REQ-001). "auto" → real when google_client_id set, else stub.
+    oauth_provider: str = "auto"
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    google_redirect_uri: str = "http://localhost:5173/auth/oauth/google/callback"
+    # edu 도메인 화이트리스트 — 이 도메인 이메일만 교사 권한 부여. CSV 또는 JSON 허용.
+    allowed_teacher_domains: list[str] = []
+    # 신규 OAuth 교사가 배정될 학교 (데모용). 운영에선 School.domain 매핑으로 대체.
+    oauth_default_school_id: str | None = None
+
+    @field_validator("allowed_teacher_domains", mode="before")
+    @classmethod
+    def split_domains(cls, v: object) -> object:
+        # 환경변수에서 "a.edu,b.ac.kr" CSV로 들어오면 리스트로 변환.
+        if isinstance(v, str):
+            return [d.strip().lower() for d in v.split(",") if d.strip()]
+        return v
+
     model_config = {"env_file": ".env"}
 
 

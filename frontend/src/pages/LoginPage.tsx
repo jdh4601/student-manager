@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { login, getMe } from '../api/auth';
+import { login, getMe, oauthGoogleLogin } from '../api/auth';
 import { useAuthStore } from '../stores/authStore';
 
 export default function LoginPage() {
@@ -118,6 +118,27 @@ export default function LoginPage() {
           aria-busy={loading}
         >
           {loading ? '로그인 중...' : '로그인'}
+        </button>
+
+        <div className="relative py-1">
+          <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-200" /></div>
+          <div className="relative flex justify-center"><span className="bg-white px-2 text-xs text-gray-400">교사</span></div>
+        </div>
+
+        <button
+          type="button"
+          onClick={async () => {
+            setError(null);
+            try {
+              const { authorize_url } = await oauthGoogleLogin();
+              window.location.href = authorize_url;
+            } catch {
+              setError('Google 로그인을 시작할 수 없습니다.');
+            }
+          }}
+          className="border border-gray-300 text-gray-700 p-2 rounded w-full hover:bg-gray-50"
+        >
+          Google로 로그인 (학교 이메일)
         </button>
 
         <div className="text-center text-sm text-gray-600">

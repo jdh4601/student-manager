@@ -31,7 +31,12 @@ from app.services.auth import (
     reset_password,
 )
 from app.services.auth_delivery import build_frontend_auth_link, deliver_auth_link
-from app.utils.security import create_access_token, decode_token, hash_password
+from app.services.oauth import (
+    GoogleOAuthClient,
+    get_oauth_client,
+    login_or_create_teacher,
+)
+from app.utils.security import create_access_token, decode_token, generate_opaque_token, hash_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -95,6 +100,36 @@ async def refresh(request: Request, db: AsyncSession = Depends(get_db)):
 @router.post("/logout", status_code=204)
 async def logout(response: Response):
     _clear_refresh_cookie(response)
+
+
+@router.get("/oauth/google/login", summary="교사 Google OAuth 시작")
+async def oauth_google_login(
+    oauth: GoogleOAuthClient = Depends(get_oauth_client),
+):
+    """구글 동의 화면 authorize_url 발급. FE는 이 URL로 리다이렉트한다."""
+    return {"authorize_url": oauth.authorize_url(state=generate_opaque_token())}
+
+
+@router.get("/oauth/google/callback", response_model=TokenResponse, summary="교사 Google OAuth 콜백")
+async def oauth_google_callback(
+    code: str,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    oauth: GoogleOAuthClient = Depends(get_oauth_client),
+):
+    """code 교환 → edu 도메인 검증 → 교사 upsert → 토큰 발급."""
+    profile = await oauth.exchange_code(code)
+    user = await login_or_create_teacher(db, profile)
+    if not user.is_active:
+        raise AppException(401, "비활성화된 계정입니다.", "AUTH_ACCOUNT_INACTIVE")
+    access_token, refresh_token = create_tokens(user)
+    _set_refresh_cookie(response, refresh_token)
+    return TokenResponse(
+        access_token=access_token,
+        role=user.role,
+        user_id=str(user.id),
+        name=user.name,
+    )
 
 
 @router.get("/me", response_model=MeResponse)
