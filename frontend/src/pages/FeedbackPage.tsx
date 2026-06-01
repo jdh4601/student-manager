@@ -11,6 +11,20 @@ import ClassSelector from '../components/classes/ClassSelector';
 import { useStudents } from '../hooks/useStudents';
 import type { Feedback, StudentSummary } from '../types';
 import FeedbackHistoryModal from '../components/feedbacks/FeedbackHistoryModal';
+import { Card, CardHeader } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import {
+  TableCard,
+  tableHeadClass,
+  tableBodyClass,
+  tableRowClass,
+  thClass,
+  tdClass,
+} from '../components/ui/Table';
+
+const fieldClass =
+  'w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-clay-soft focus:outline-none focus:ring-2 focus:ring-clay-wash';
+const labelClass = 'text-sm font-medium text-ink-soft';
 
 const CATEGORIES: Feedback['category'][] = ['grade', 'behavior', 'attendance', 'attitude'];
 const CATEGORY_LABEL: Record<Feedback['category'], string> = {
@@ -137,23 +151,23 @@ export default function FeedbackPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">피드백 관리</h1>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">피드백 관리</h1>
+          <p className="mt-1 text-sm text-ink-soft">학급을 선택해 학생별 피드백을 작성·관리하세요.</p>
+        </div>
         {classId && (
-          <button
-            onClick={() => setShowForm((v) => !v)}
-            className="px-3 py-1 bg-indigo-600 text-white rounded text-sm"
-          >
+          <Button variant="primary" size="md" onClick={() => setShowForm((v) => !v)}>
             {showForm ? '닫기' : '+ 피드백 작성'}
-          </button>
+          </Button>
         )}
       </div>
 
       {/* 학급 선택 (대시보드 및 폼 공용 상태) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label className="text-sm text-gray-600">학급 선택</label>
+      <Card>
+        <div className="flex flex-wrap items-center gap-3">
+          <span className={labelClass}>학급 선택</span>
           <ClassSelector
             value={classId}
             onChange={(id) => {
@@ -168,139 +182,136 @@ export default function FeedbackPage() {
             disabled={!!editingId}
           />
         </div>
-      </div>
+      </Card>
 
       {showForm && (
-        <form onSubmit={handleSubmit} className="border rounded p-4 space-y-3 bg-gray-50">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm text-gray-600">학생</label>
-              <StudentSelector
-                value={form.student_id}
-                onChange={(id) => setForm({ ...form, student_id: id })}
-                classId={classId || undefined}
-                disabled={!!editingId || !classId}
+        <Card>
+          <CardHeader title={editingId ? '피드백 수정' : '피드백 작성'} />
+          <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1">
+                <label className={labelClass}>학생</label>
+                <StudentSelector
+                  value={form.student_id}
+                  onChange={(id) => setForm({ ...form, student_id: id })}
+                  classId={classId || undefined}
+                  disabled={!!editingId || !classId}
+                  required
+                />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>카테고리</label>
+                <select
+                  className={fieldClass}
+                  value={form.category}
+                  onChange={(e) =>
+                    setForm({ ...form, category: e.target.value as Feedback['category'] })
+                  }
+                >
+                  {CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {CATEGORY_LABEL[c]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className={labelClass}>내용</label>
+              <textarea
+                className={`${fieldClass} h-24`}
+                value={form.content}
+                onChange={(e) => setForm({ ...form, content: e.target.value })}
                 required
               />
             </div>
-            <div>
-              <label className="text-sm text-gray-600">카테고리</label>
-              <select
-                className="border w-full p-1 text-sm"
-                value={form.category}
-                onChange={(e) =>
-                  setForm({ ...form, category: e.target.value as Feedback['category'] })
-                }
-              >
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>
-                    {CATEGORY_LABEL[c]}
-                  </option>
-                ))}
-              </select>
+            <div className="flex gap-4 text-sm text-ink">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-clay"
+                  checked={form.is_visible_to_student}
+                  onChange={(e) => setForm({ ...form, is_visible_to_student: e.target.checked })}
+                />
+                학생 공개
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-clay"
+                  checked={form.is_visible_to_parent}
+                  onChange={(e) => setForm({ ...form, is_visible_to_parent: e.target.checked })}
+                />
+                학부모 공개
+              </label>
             </div>
-          </div>
-          <div>
-            <label className="text-sm text-gray-600">내용</label>
-            <textarea
-              className="border w-full p-1 text-sm h-24"
-              value={form.content}
-              onChange={(e) => setForm({ ...form, content: e.target.value })}
-              required
-            />
-          </div>
-          <div className="flex gap-4 text-sm">
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={form.is_visible_to_student}
-                onChange={(e) => setForm({ ...form, is_visible_to_student: e.target.checked })}
-              />
-              학생 공개
-            </label>
-            <label className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={form.is_visible_to_parent}
-                onChange={(e) => setForm({ ...form, is_visible_to_parent: e.target.checked })}
-              />
-              학부모 공개
-            </label>
-          </div>
-          <div className="flex gap-2">
-            <button type="submit" className="px-3 py-1 bg-indigo-600 text-white rounded text-sm">
-              {editingId ? '수정' : '저장'}
-            </button>
-            <button
-              type="button"
-              onClick={resetForm}
-              className="px-3 py-1 bg-gray-300 rounded text-sm"
-            >
-              취소
-            </button>
-          </div>
-        </form>
+            <div className="flex gap-2">
+              <Button type="submit" variant="primary">
+                {editingId ? '수정' : '저장'}
+              </Button>
+              <Button type="button" variant="ghost" onClick={resetForm}>
+                취소
+              </Button>
+            </div>
+          </form>
+        </Card>
       )}
 
       {/* 학급 선택 시 학생 리스트 (번호/이름/최근 피드백 일자/피드백 내용/수정/삭제) */}
-      <div className="space-y-2">
-        {!classId ? (
-          <div className="text-sm text-gray-500">학급을 먼저 선택하세요.</div>
-        ) : !students ? (
-          <div>불러오는 중...</div>
-        ) : students.length === 0 ? (
-          <div className="text-sm text-gray-500">학생이 없습니다.</div>
-        ) : studentsWithFeedback.length === 0 ? (
-          <div className="text-sm text-gray-500">피드백이 없습니다.</div>
-        ) : (
-          <table className="w-full text-sm border bg-white">
-            <thead className="bg-gray-50">
+      {!classId ? (
+        <Card className="text-sm text-ink-soft">학급을 먼저 선택하세요.</Card>
+      ) : !students ? (
+        <Card className="text-sm text-ink-soft">불러오는 중...</Card>
+      ) : students.length === 0 ? (
+        <Card className="text-sm text-ink-soft">학생이 없습니다.</Card>
+      ) : studentsWithFeedback.length === 0 ? (
+        <Card className="text-sm text-ink-soft">피드백이 없습니다.</Card>
+      ) : (
+        <TableCard>
+          <table className="w-full text-sm">
+            <thead className={tableHeadClass}>
               <tr>
-                <th className="p-2 border">번호</th>
-                <th className="p-2 border">이름</th>
-                <th className="p-2 border">최근 피드백 일자</th>
-                <th className="p-2 border text-center">피드백 내용</th>
-                <th className="p-2 border">삭제</th>
+                <th className={thClass}>번호</th>
+                <th className={`${thClass} text-left`}>이름</th>
+                <th className={thClass}>최근 피드백 일자</th>
+                <th className={thClass}>피드백 내용</th>
+                <th className={thClass}>삭제</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className={tableBodyClass}>
               {studentsWithFeedback.map((s) => {
                 const fb = latestFeedbackByStudent[s.id];
                 return (
-                  <tr key={s.id} className="border-b">
-                    <td className="p-2 border text-center">{s.student_number}</td>
-                    <td className="p-2 border">{s.name}</td>
-                    <td className="p-2 border text-center">{formatDate(fb?.created_at)}</td>
-                    <td className="p-2 border text-center">
+                  <tr key={s.id} className={tableRowClass}>
+                    <td className={`${tdClass} text-muted`}>{s.student_number}</td>
+                    <td className={`${tdClass} text-left`}>{s.name}</td>
+                    <td className={tdClass}>{formatDate(fb?.created_at)}</td>
+                    <td className={tdClass}>
                       {fb ? (
-                        <button
-                          type="button"
-                          className="px-2 py-0.5 text-xs border rounded"
-                          onClick={() => setHistoryStudentId(s.id)}
-                        >
+                        <Button type="button" variant="ghost" onClick={() => setHistoryStudentId(s.id)}>
                           내용 보기
-                        </button>
+                        </Button>
                       ) : (
-                        <span className="text-gray-400">-</span>
+                        <span className="text-muted">-</span>
                       )}
                     </td>
-                    <td className="p-2 border text-center">
-                      <button
+                    <td className={tdClass}>
+                      <Button
                         type="button"
-                        className="text-xs text-red-500 disabled:text-gray-300"
+                        variant="danger"
                         disabled={!fb}
                         onClick={() => fb && handleDelete(fb.id)}
                       >
                         삭제
-                      </button>
+                      </Button>
                     </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
-        )}
-      </div>
+        </TableCard>
+      )}
 
       {historyStudentId && (
         <FeedbackHistoryModal

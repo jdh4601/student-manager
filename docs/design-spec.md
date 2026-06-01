@@ -1,14 +1,15 @@
 # 학생 성적 및 상담 관리 시스템 — Design Spec
 
-**버전**: 2.2
-**작성일**: 2026-05-23
+**버전**: 2.3
+**작성일**: 2026-05-31 (v2.2 → 2026-05-23)
 **상태**: 확정
-**기반 문서**: PRD v2.1, ADR-001 (재작성), ~~ADR-002 (Outbox + Kafka)~~ → **ADR-003** (Outbox + Postgres LISTEN/NOTIFY + SKIP LOCKED)
+**기반 문서**: PRD v2.2, ADR-001 (재작성), ~~ADR-002 (Outbox + Kafka)~~ → **ADR-003** (Outbox + Postgres LISTEN/NOTIFY + SKIP LOCKED)
 **프로젝트 성격**: 졸업 평가용 프로토타입 (Render + Vercel 클라우드 + 로컬 docker-compose, 사용자 0명)
 **변경 이력**:
 - v1.0 → v2.0: Critic 리뷰 반영
 - v2.0 → v2.1: §1 docker-compose 로컬 인프라, §9 Outbox+Kafka 기반 Analytics Layer, §10 단일 엔드포인트 챗봇
 - v2.1 → v2.2: ADR-003 반영 — Kafka 제거, Postgres LISTEN/NOTIFY + SKIP LOCKED로 §9 CDC 메커니즘 교체. 클라우드 surface (Vercel + Render Worker × 2) 추가.
+- v2.2 → v2.3: 발표 보완 5종 반영 — 교사 Google OAuth(§3.1.1) · 무중단 배포 헬스 probe(§3.10) · OpenAPI 명세 산출 강화(§3 머리말) · 테스트 피라미드 실측(§8.5). (②④는 프로세스/산출물 항목으로 `docs/notes/` 참조)
 
 ---
 
@@ -43,6 +44,8 @@
 3. **Rate Limiting**: 로그인 엔드포인트와 `/api/v1/chat`에 slowapi 기반 제한. 챗봇은 사용자 ID 키, 로그인은 IP 키.
 4. **타 학교 데이터 접근**: 404 반환 (403 대신 — 존재 자체를 숨김. IDOR 방지). §4.3과 일관.
 5. **챗봇 마스킹 토큰 확장**: 학생 26명 초과 시 `학생A..Z` → `학생AA..ZZ`로 두 글자 확장 (~702명까지 안전). 라우터 정규식 `학생[A-Z]{1,2}`로 양쪽 매칭. 상세 §10.3.
+6. **교사 Google OAuth (v2.3, REQ-006)**: Authorization Code + OIDC. state는 HttpOnly 쿠키 바인딩 + `secrets.compare_digest`로 검증(CSRF 방어). `email_verified` 가드 + `ALLOWED_TEACHER_DOMAINS` 화이트리스트 게이트. `GoogleOAuthClient` Protocol + Stub/Real 구현으로 DI (LLM 클라이언트와 동일 패턴). stub은 `ENVIRONMENT≠production` 또는 `ALLOW_OAUTH_STUB=true`에서만 동작 — production 인증 우회 차단. 상세 §3.1.1.
+7. **무중단 배포 헬스 probe (v2.3)**: `/health`(liveness) / `/ready`(readiness, `SELECT 1` DB 검증) 분리. 상세 §3.10.
 
 ---
 
@@ -297,6 +300,37 @@ Authorization: None
 ```
 
 > `POST /auth/logout`, `GET /auth/me` — §3 머리말 "단순 엔드포인트 인벤토리" 표 참조.
+
+#### 3.1.1 교사 Google OAuth (v2.3, REQ-006)
+
+> 학생·학부모는 초대 링크 가입, **교사는 Google OAuth + 학교 이메일 도메인 화이트리스트**로 계정 발급 문제를 완결한다.
+
+#### GET /auth/oauth/google/login
+```
+Response 200:
+  { "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth?..." }
+  Set-Cookie: oauth_state=<random>; HttpOnly; SameSite=lax; Max-Age=600
+
+-- 클라이언트는 authorize_url로 redirect. state는 쿠키에 바인딩되어 CSRF 방어.
+Authorization: None
+```
+
+#### GET /auth/oauth/google/callback
+```
+Query: ?code=<auth_code>&state=<state>
+
+Response 200: (POST /auth/login과 동일한 TokenResponse — access_token + refresh 쿠키)
+
+Response 400: { "code": "AUTH_OAUTH_STATE_MISMATCH",   "detail": "잘못된 OAuth 요청입니다 (state 불일치)." }
+Response 403: { "code": "AUTH_OAUTH_DOMAIN_NOT_ALLOWED", "detail": "허용되지 않은 이메일 도메인입니다." }
+Response 503: { "code": "AUTH_OAUTH_NOT_CONFIGURED",    "detail": "OAuth가 구성되지 않았습니다." }  -- production에서 stub 호출 시
+
+Authorization: None
+처리 순서: state↔쿠키 compare_digest → code→token→userinfo → email_verified 가드
+          → 도메인 화이트리스트 게이트 → 기존 교사 로그인 / 신규 교사 생성(oauth_default_school_id)
+환경변수: OAUTH_PROVIDER(auto|real|stub), GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI,
+          ALLOWED_TEACHER_DOMAINS(CSV), OAUTH_DEFAULT_SCHOOL_ID, ALLOW_OAUTH_STUB, ENVIRONMENT
+```
 
 ---
 
@@ -825,6 +859,27 @@ Authorization: teacher (담당 학급)
 
 ---
 
+### 3.10 헬스체크 / 무중단 배포 게이트 (v2.3)
+
+> 인증 불필요. `/api/v1` prefix 밖의 루트 엔드포인트. liveness ≠ readiness 분리로 무중단 롤링 배포를 지원.
+
+#### GET /health — Liveness probe
+```
+Response 200: { "status": "ok" }   -- 프로세스 생존만 확인 (DB 미접근, 즉시 응답)
+용도: 컨테이너 오케스트레이터가 프로세스 데드락/행 감지 → 실패 시 재시작
+```
+
+#### GET /ready — Readiness probe
+```
+Response 200: { "status": "ready" }
+Response 503: { "code": "DB_NOT_READY", "detail": "데이터베이스 준비가 되지 않았습니다." }
+검증: SELECT 1로 DB 연결 확인. 실패 시 503 → LB가 트래픽 제외 (재시작 아님)
+용도: 롤링 배포 시 신 인스턴스가 ready가 된 후에만 트래픽 수신 (maxUnavailable=0).
+      Render는 healthCheckPath로, 예시 K8s(`deploy/k8s/`)는 readinessProbe로 동일 의미론.
+```
+
+---
+
 ## 4. Authorization Model (RBAC)
 
 ### 4.1 역할 정의
@@ -1133,6 +1188,16 @@ GET /grades/{student_id}/summary?semester_ids=uuid1,uuid2
 - 성적 bulk 입력은 `/grades/bulk`가 아니라 `/import/grades`와 `/import/grades/xlsx`로 처리합니다.
 - 학생 CSV/XLSX import는 이메일을 포함하며, 성적 CSV import는 `student_number + subject_name` 계약과 update 동작을 지원합니다.
 - 상담 상세 화면은 클라이언트 PDF 리포트 내보내기를 지원합니다.
+
+### 8.5 테스트 전략 — 3계층 피라미드 (v2.3, 실측 2026-05-31)
+
+| 계층 | 도구·위치 | 실측 | 검증 대상 |
+|------|-----------|------|-----------|
+| 단위 (unit) | pytest, `backend/tests/test_*.py` | 200 passed / 10 skip, **커버리지 81%** | 9등급 계산, RBAC 스코프, school_id 격리, LLM sanitizer, OAuth 도메인 게이트 |
+| 통합 (integration) | testcontainers 실 Postgres, `backend/tests/integration/` | `pytest -m integration` | outbox→publisher→worker→`analytics.*` 정합성, SKIP LOCKED scale=3 중복 0, idempotency |
+| E2E | Playwright, `frontend/e2e/*.spec.ts` | 11 spec | 로그인·성적·피드백·분석 RBAC·챗봇 PII 마스킹·모바일 반응형 |
+
+> Frontend 컴포넌트 단위 테스트는 호스트 환경 이슈(Node 25 ≠ vitest 1.6 + Linux node_modules 바이너리)로 일시 보류 — 근본 원인·해결 명령은 `docs/notes/frontend-test-env-fix.md`. E2E가 frontend 동작을 실 브라우저로 검증하므로 평가 신뢰성은 확보. 발표 서사는 `docs/notes/test-pyramid-presentation.md`.
 
 ---
 

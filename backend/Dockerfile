@@ -29,7 +29,7 @@ ENV DATABASE_URL=sqlite+aiosqlite:///./test.db \
     APP_BASE_URL=http://localhost:5173 \
     AUTH_LINK_DELIVERY=stub \
     RUN_SEED=0 \
-    ALLOWED_ORIGINS="[\"http://localhost:5173\"]"
+    ALLOWED_ORIGINS="[\"https://frontend-phi-sand-33.vercel.app\"]"
 
 EXPOSE 8000
 

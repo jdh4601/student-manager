@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-import pytest
-
-from app.services.llm_sanitizer import MIN_SAMPLE_SIZE, SmallSampleError, mask_context
+from app.services.llm_sanitizer import mask_context
 
 
 def _student_rows(n: int) -> list[dict]:
@@ -68,14 +66,18 @@ def test_mask_context_strips_student_id_email_phone():
         assert "phone" not in row
 
 
-def test_mask_context_raises_for_k4():
-    with pytest.raises(SmallSampleError):
-        mask_context(_student_rows(MIN_SAMPLE_SIZE - 1))
+def test_mask_context_masks_below_former_threshold():
+    """k<5 도 더 이상 차단하지 않고 정상 마스킹한다 (k≥5 가드 제거)."""
+    rows = _student_rows(3)
+    masked, token_map = mask_context(rows)
+    assert [r["student_name"] for r in masked] == ["학생A", "학생B", "학생C"]
+    assert len(token_map) == 3
 
 
-def test_mask_context_raises_for_empty():
-    with pytest.raises(SmallSampleError):
-        mask_context([])
+def test_mask_context_handles_empty():
+    masked, token_map = mask_context([])
+    assert masked == []
+    assert token_map == {}
 
 
 def test_mask_context_passes_through_aggregate_rows_without_student_id():

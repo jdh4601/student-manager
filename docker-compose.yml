@@ -37,6 +37,14 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-auto}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+      # 교사 Google OAuth (REQ-006). client_id 있으면 real, 없으면 stub 폴백(dev 한정).
+      # 시크릿은 gitignore된 루트 .env에서 주입 — compose 파일에 평문 커밋 금지.
+      OAUTH_PROVIDER: ${OAUTH_PROVIDER:-auto}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:5173/auth/oauth/google/callback}
+      ALLOWED_TEACHER_DOMAINS: ${ALLOWED_TEACHER_DOMAINS:-inu.ac.kr}
+      OAUTH_DEFAULT_SCHOOL_ID: ${OAUTH_DEFAULT_SCHOOL_ID:-197e69ae-2a9b-45a1-933b-2f1553156bd1}
     depends_on:
       db:
         condition: service_healthy

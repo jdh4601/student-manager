@@ -8,6 +8,39 @@ import StudentCreateForm from '../components/students/StudentCreateForm';
 import ClassCreateModal from '../components/classes/ClassCreateModal';
 import type { ClassSummary } from '../types';
 import { exportStudentsToCSV, exportStudentsToExcel } from '../utils/exportHelpers';
+import { Card } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+
+const iconProps = {
+  width: 16,
+  height: 16,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+  'aria-hidden': true,
+};
+
+const PlusIcon = () => (
+  <svg {...iconProps}><path d="M12 5v14M5 12h14" /></svg>
+);
+const TrashIcon = () => (
+  <svg {...iconProps}><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6" /></svg>
+);
+const UserPlusIcon = () => (
+  <svg {...iconProps}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M19 8v6M22 11h-6" /></svg>
+);
+const UsersIcon = () => (
+  <svg {...iconProps}><path d="M17 21v-2a4 4 0 0 0-3-3.87M13 3.13a4 4 0 0 1 0 7.75M7 21v-2a4 4 0 0 1 4-4h0a4 4 0 0 1 4 4v2" /><circle cx="9" cy="7" r="4" /></svg>
+);
+const CsvIcon = () => (
+  <svg {...iconProps}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6M8 13h2M8 17h6" /></svg>
+);
+const ExcelIcon = () => (
+  <svg {...iconProps}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18M3 15h18M9 3v18M15 3v18" /></svg>
+);
 
 export default function StudentListPage() {
   const [classes, setClasses] = useState<ClassSummary[]>([]);
@@ -72,28 +105,37 @@ export default function StudentListPage() {
   }, []);
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">학생 목록</h1>
+    <div className="space-y-6">
+      <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">학생 목록</h1>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex gap-2 items-center">
-          <label className="text-sm text-gray-600">학급 선택</label>
+          <label className="text-sm font-medium text-ink-soft">학급 선택</label>
           {classes.length > 0 ? (
-            <select className="border p-1" value={effectiveClassId || ''} onChange={(e) => { setClassId(e.target.value); try { localStorage.setItem('selectedClassId', e.target.value); } catch {} }}>
+            <select
+              className="rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink focus:border-clay-soft focus:outline-none focus:ring-2 focus:ring-clay-wash"
+              value={effectiveClassId || ''}
+              onChange={(e) => { setClassId(e.target.value); try { localStorage.setItem('selectedClassId', e.target.value); } catch {} }}
+            >
               {classes.map((c) => (
                 <option key={c.id} value={c.id}>{`${c.year}학년도 ${c.grade}학년 ${c.name}`}</option>
               ))}
             </select>
           ) : (
             <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500">학급이 없습니다.</span>
-              <button className="px-2 py-1 text-sm border rounded" onClick={() => setShowClassCreate(true)}>학급 만들기</button>
+              <span className="text-sm text-muted">학급이 없습니다.</span>
+              <Button variant="ghost" onClick={() => setShowClassCreate(true)}>학급 만들기</Button>
             </div>
           )}
           {classes.length > 0 && (
-            <button className="px-2 py-1 text-sm border rounded" onClick={() => setShowClassCreate(true)}>학급 추가</button>
+            <Button variant="ghost" icon={<PlusIcon />} title="학급 추가" aria-label="학급 추가" onClick={() => setShowClassCreate(true)}>
+              학급
+            </Button>
           )}
-          <button
-            className="px-2 py-1 text-sm border rounded text-red-700 border-red-300 disabled:opacity-50 ml-4"
+          <Button
+            variant="danger"
+            icon={<TrashIcon />}
+            title="학급 삭제"
+            aria-label="학급 삭제"
             disabled={!effectiveClassId}
             onClick={async () => {
               if (!effectiveClassId) return;
@@ -124,12 +166,15 @@ export default function StudentListPage() {
               }
             }}
           >
-            학급 삭제
-          </button>
+            삭제
+          </Button>
         </div>
-        <div className="flex gap-2">
-          <button
-            className="px-3 py-1 rounded text-sm border"
+        <div className="flex items-center gap-2">
+          <Button
+            variant="primary"
+            icon={<UserPlusIcon />}
+            aria-label="학생 초대"
+            title="학생 초대"
             onClick={() => {
               if (!effectiveClassId) {
                 toast.error('학급을 먼저 선택하세요.');
@@ -138,10 +183,13 @@ export default function StudentListPage() {
               setShowCreateForm(true);
             }}
           >
-            학생 초대
-          </button>
-          <button
-            className="px-3 py-1 rounded text-sm border"
+            초대
+          </Button>
+          <Button
+            variant="ghost"
+            icon={<UsersIcon />}
+            aria-label="여러 명 초대"
+            title="여러 명 초대"
             onClick={() => {
               // Require a valid class in the current list
               if (!effectiveClassId || !classes.some((c) => c.id === effectiveClassId)) {
@@ -151,44 +199,48 @@ export default function StudentListPage() {
               setShowUploadModal(true);
             }}
           >
-            여러 명 초대
-          </button>
-          <button
-            className="px-3 py-1 rounded text-sm border"
+            여러 명
+          </Button>
+          <div className="mx-1 h-6 w-px self-center bg-line" aria-hidden />
+          <Button
+            variant="ghost"
+            icon={<CsvIcon />}
+            aria-label="CSV로 내보내기"
+            title="CSV로 내보내기"
             disabled={!students || students.length === 0}
             onClick={() => {
               if (students) exportStudentsToCSV(students, currentClassLabel);
             }}
-          >
-            CSV로 내보내기
-          </button>
-          <button
-            className="px-3 py-1 rounded text-sm border"
+          />
+          <Button
+            variant="ghost"
+            icon={<ExcelIcon />}
+            className="text-positive"
+            aria-label="엑셀로 내보내기"
+            title="엑셀로 내보내기"
             disabled={!students || students.length === 0}
             onClick={async () => {
               if (students) await exportStudentsToExcel(students, currentClassLabel);
             }}
-          >
-            엑셀로 내보내기
-          </button>
+          />
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-4 rounded border bg-white p-3">
-        <label className="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" checked={showPendingOnly} onChange={(e) => setShowPendingOnly(e.target.checked)} aria-label="대기만 보기" />
+      <Card flush className="flex flex-wrap items-center gap-4 p-4">
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" className="h-4 w-4 accent-clay" checked={showPendingOnly} onChange={(e) => setShowPendingOnly(e.target.checked)} aria-label="대기만 보기" />
           대기만 보기
         </label>
-        <label className="flex items-center gap-2 text-sm text-gray-700">
-          <input type="checkbox" checked={showExpiringSoonOnly} onChange={(e) => setShowExpiringSoonOnly(e.target.checked)} aria-label="7일 내 만료 예정" />
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" className="h-4 w-4 accent-clay" checked={showExpiringSoonOnly} onChange={(e) => setShowExpiringSoonOnly(e.target.checked)} aria-label="7일 내 만료 예정" />
           7일 내 만료 예정
         </label>
-      </div>
+      </Card>
       {isLoading ? (
-        <div>불러오는 중...</div>
+        <Card className="text-sm text-ink-soft">불러오는 중...</Card>
       ) : students ? (
         <StudentList students={filteredStudents} />
       ) : (
-        <div>학생이 없습니다.</div>
+        <Card className="text-sm text-ink-soft">학생이 없습니다.</Card>
       )}
       {showUploadModal && effectiveClassId && (
         <BulkInviteModal classId={effectiveClassId} onClose={() => setShowUploadModal(false)} />

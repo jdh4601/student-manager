@@ -18,32 +18,32 @@ export default function StudentOverviewPanel({ studentId, semesterId }: Props) {
 
   if (!studentId) {
     return (
-      <p className="text-sm text-gray-400" data-testid="overview-placeholder">
+      <p className="text-sm text-muted" data-testid="overview-placeholder">
         학생을 선택해 상세 지표를 확인하세요.
       </p>
     );
   }
-  if (isLoading) return <p className="text-sm text-gray-500">학생 분석 불러오는 중...</p>;
+  if (isLoading) return <p className="text-sm text-ink-soft">학생 분석 불러오는 중…</p>;
   if (error) {
     return (
-      <p className="text-sm text-red-600" role="alert">
+      <p className="text-sm text-negative" role="alert">
         학생 분석 데이터를 가져올 수 없습니다.
       </p>
     );
   }
   if (!data || (!data.overall && data.subjects.length === 0)) {
     return (
-      <p className="text-sm text-gray-400">
+      <p className="text-sm text-muted">
         아직 분석 데이터가 없습니다. 성적·출결·피드백 입력 후 1분 이내 반영됩니다.
       </p>
     );
   }
 
   return (
-    <div className="space-y-3" data-testid="overview-panel">
+    <div className="space-y-4" data-testid="overview-panel">
       {data.overall && (
-        <dl className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-sm">
-          <Stat label="평균" value={fmt(data.overall.avg_score)} />
+        <dl className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <Stat label="평균" value={fmt(data.overall.avg_score)} accent />
           <Stat label="총점" value={fmt(data.overall.total_score)} />
           <Stat label="과목 수" value={String(data.overall.subject_count)} />
           <Stat label="출석률" value={pct(data.overall.attendance_present_rate)} />
@@ -53,26 +53,26 @@ export default function StudentOverviewPanel({ studentId, semesterId }: Props) {
 
       {data.subjects.length > 0 && (
         <div className="overflow-x-auto">
-          <table className="min-w-full text-xs">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-2 py-1 text-left">과목</th>
-                <th className="px-2 py-1 text-right">평균</th>
-                <th className="px-2 py-1 text-right">최고</th>
-                <th className="px-2 py-1 text-right">최저</th>
-                <th className="px-2 py-1 text-right">최근 등급</th>
-                <th className="px-2 py-1 text-right">표본</th>
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-line text-left text-[11px] uppercase tracking-wide text-muted">
+                <th className="px-2 py-2 font-medium">과목</th>
+                <th className="px-2 py-2 text-right font-medium">평균</th>
+                <th className="px-2 py-2 text-right font-medium">최고</th>
+                <th className="px-2 py-2 text-right font-medium">최저</th>
+                <th className="px-2 py-2 text-right font-medium">최근 등급</th>
+                <th className="px-2 py-2 text-right font-medium">표본</th>
               </tr>
             </thead>
             <tbody>
               {data.subjects.map((s) => (
-                <tr key={s.subject_id} className="border-t">
-                  <td className="px-2 py-1">{s.name}</td>
-                  <td className="px-2 py-1 text-right">{fmt(s.avg_score)}</td>
-                  <td className="px-2 py-1 text-right">{fmt(s.max_score)}</td>
-                  <td className="px-2 py-1 text-right">{fmt(s.min_score)}</td>
-                  <td className="px-2 py-1 text-right">{s.latest_rank ?? '—'}</td>
-                  <td className="px-2 py-1 text-right">{s.sample_count}</td>
+                <tr key={s.subject_id} className="border-b border-line-soft last:border-0">
+                  <td className="px-2 py-2 font-medium text-ink">{s.name}</td>
+                  <td className="px-2 py-2 text-right tnum text-ink">{fmt(s.avg_score)}</td>
+                  <td className="px-2 py-2 text-right tnum text-ink-soft">{fmt(s.max_score)}</td>
+                  <td className="px-2 py-2 text-right tnum text-ink-soft">{fmt(s.min_score)}</td>
+                  <td className="px-2 py-2 text-right tnum text-ink-soft">{s.latest_rank ?? '—'}</td>
+                  <td className="px-2 py-2 text-right tnum text-muted">{s.sample_count}</td>
                 </tr>
               ))}
             </tbody>
@@ -83,11 +83,21 @@ export default function StudentOverviewPanel({ studentId, semesterId }: Props) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
-    <div className="border rounded p-2 text-center bg-white">
-      <div className="text-base font-semibold text-indigo-600">{value}</div>
-      <div className="text-xs text-gray-500">{label}</div>
+    <div
+      className={`rounded-xl border px-3 py-2.5 text-center ${
+        accent ? 'border-clay-wash bg-clay-wash/50' : 'border-line bg-surface-soft/50'
+      }`}
+    >
+      <div
+        className={`font-display text-xl font-semibold tnum ${
+          accent ? 'text-clay-ink' : 'text-ink'
+        }`}
+      >
+        {value}
+      </div>
+      <div className="mt-0.5 text-xs text-ink-soft">{label}</div>
     </div>
   );
 }

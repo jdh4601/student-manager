@@ -1,0 +1,74 @@
+# 수평 확장(Horizontal scaling) 시연용 — analytics-worker.
+#
+# docker-compose의 `--scale analytics-worker=3`과 동일한 개념의 K8s 표현.
+# replicas=3 → 3개 Pod가 같은 Postgres NOTIFY를 받지만, SELECT FOR UPDATE
+# SKIP LOCKED로 각 outbox row를 정확히 1개 워커만 claim (ADR-003).
+# = Kafka consumer group의 partition 분배와 등가. 외부 broker 불필요.
+#
+# Service 없음: 워커는 인바운드 트래픽을 받지 않는다 (DB를 LISTEN/poll).
+# 따라서 readinessProbe도 불필요 — livenessProbe만으로 hang 감지.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: student-manager-analytics-worker
+  labels: { app: student-manager, component: analytics-worker }
+spec:
+  replicas: 3  # ← 수평 확장. HPA로 자동화 가능 (평가 후 트랙)
+  selector:
+    matchLabels: { app: student-manager, component: analytics-worker }
+  template:
+    metadata:
+      labels: { app: student-manager, component: analytics-worker }
+    spec:
+      containers:
+        - name: analytics-worker
+          image: student-manager-backend:latest
+          command: ["python", "-m", "app.workers.analytics"]
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: sm-secrets, key: database-url } }
+            - name: PYTHONPATH
+              value: /app
+            - name: LISTEN_NOTIFY_CATCHUP_INTERVAL
+              value: "60.0"
+            - name: OUTBOX_MAX_RETRIES
+              value: "3"
+          # 워커는 트래픽을 받지 않으므로 liveness만. ready 개념 불필요.
+          livenessProbe:
+            exec:
+              command: ["python", "-c", "import sys; sys.exit(0)"]
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "1", memory: 512Mi }
+---
+# 단일 outbox-publisher (relay). SKIP LOCKED 덕분에 다중화도 안전하지만
+# 평가 규모에선 1개로 충분 (architecture.md §5.1).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: student-manager-outbox-publisher
+  labels: { app: student-manager, component: outbox-publisher }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: student-manager, component: outbox-publisher }
+  template:
+    metadata:
+      labels: { app: student-manager, component: outbox-publisher }
+    spec:
+      containers:
+        - name: outbox-publisher
+          image: student-manager-backend:latest
+          command: ["python", "-m", "app.workers.outbox_publisher"]
+          env:
+            - name: DATABASE_URL
+              valueFrom: { secretKeyRef: { name: sm-secrets, key: database-url } }
+            - name: PYTHONPATH
+              value: /app
+            - name: LISTEN_NOTIFY_IDLE_POLL_INTERVAL
+              value: "0.5"
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }

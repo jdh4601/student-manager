@@ -1,10 +1,11 @@
 import { lazy, Suspense } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { SpeedInsights } from '@vercel/speed-insights/react';
 import LoginPage from './pages/LoginPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import SignupPage from './pages/SignupPage';
+import OAuthCallbackPage from './pages/OAuthCallbackPage';
 import LandingPage from './pages/LandingPage';
 import RootIndex from './pages/RootIndex';
 import ProtectedRoute from './components/auth/ProtectedRoute';
@@ -20,7 +21,6 @@ const GradesPage = lazy(() => import('./pages/GradesPage'));
 const FeedbackPage = lazy(() => import('./pages/FeedbackPage'));
 const CounselingPage = lazy(() => import('./pages/CounselingPage'));
 const NotificationsPage = lazy(() => import('./pages/NotificationsPage'));
-const AnalyticsDashboardPage = lazy(() => import('./pages/AnalyticsDashboardPage'));
 
 function App() {
   return (
@@ -30,6 +30,7 @@ function App() {
       <Routes>
       <Route path="/" element={<RootIndex /> } />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/auth/oauth/google/callback" element={<OAuthCallbackPage />} />
       {/* Role-aware notifications page for all authenticated users */}
       <Route
         path="/notifications"
@@ -72,7 +73,8 @@ function App() {
               <Suspense fallback={<div className="p-4">불러오는 중...</div>}>
                 <Routes>
                   <Route path="/dashboard" element={<DashboardPage />} />
-                  <Route path="/analytics" element={<AnalyticsDashboardPage />} />
+                  {/* Analytics merged into the dashboard; keep old links working */}
+                  <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/students" element={<StudentListPage />} />
                   <Route path="/students/:studentId" element={<StudentDetailPage />} />
                   <Route path="/grades/:studentId" element={<GradesPage />} />

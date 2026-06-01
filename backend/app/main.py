@@ -25,7 +25,45 @@ from app.routers import chat
 
 
 
-app = FastAPI(title="Student Manager API", version="0.1.0")
+# OpenAPI 태그 메타데이터 — Swagger UI에서 도메인별 그룹 + 설명 노출.
+# 팀 개발의 API 합의(contract-first)를 시각적으로 증명하는 단일 진실 공급원.
+tags_metadata = [
+    {"name": "auth", "description": "로그인·토큰 발급/갱신, 초대 수락, 비밀번호 재설정. access=메모리 / refresh=HttpOnly 쿠키."},
+    {"name": "users", "description": "교사·학생·학부모 계정 관리 (role + school_id 범위 검증)."},
+    {"name": "students", "description": "학생부 — 기본정보·출결·특기사항 CRUD."},
+    {"name": "classes", "description": "학급·담임 매핑 관리."},
+    {"name": "semesters", "description": "학기 정의 (1학기 3~8월 / 2학기 9~2월)."},
+    {"name": "grades", "description": "성적 입력·수정, 총점·평균·9등급 자동 계산, 레이더 차트 데이터."},
+    {"name": "feedbacks", "description": "피드백 작성/공개여부 제어 (학생·학부모 독립 설정)."},
+    {"name": "counselings", "description": "상담 기록 — 같은 학교 교사 간 공유 제어."},
+    {"name": "notifications", "description": "인앱 알림 — 성적·피드백·상담 업데이트."},
+    {"name": "import", "description": "CSV/Excel 일괄 가져오기 (학생·성적)."},
+    {"name": "analytics", "description": "분석 대시보드 — analytics 스키마 집계 캐시 read (담임 한정 RBAC)."},
+    {"name": "chat", "description": "AI 어시스턴트 — 학급 단위 통계 기반 자연어 응답 (PII 마스킹)."},
+    {"name": "my", "description": "현재 사용자 본인 관점 조회 (학생/학부모 read-only)."},
+    {"name": "health", "description": "운영 헬스체크 — liveness(/health) / readiness(/ready). 무중단 배포 게이트."},
+]
+
+DESCRIPTION = """
+학생 성적·상담 관리 SaaS의 백엔드 API.
+
+**계약 우선(contract-first)**: 모든 엔드포인트는 Pydantic v2 스키마로 정의되며,
+이 문서(`/openapi.json`)가 프론트엔드·백엔드 간 단일 API 합의안이다.
+`scripts/export_openapi.py`로 산출물을 추출해 팀 리뷰/Postman 임포트에 사용한다.
+
+- **에러 계약**: 모든 비즈니스 에러는 `{ detail, code }` JSON (AppException)
+- **인증**: JWT access(1h) / refresh(7d, HttpOnly). 모든 쿼리에 `role + school_id` 범위 강제
+- **멀티테넌트 격리**: Postgres Row-Level Security로 DB 레벨에서 school_id 강제
+"""
+
+app = FastAPI(
+    title="Student Manager API",
+    version="0.1.0",
+    description=DESCRIPTION,
+    openapi_tags=tags_metadata,
+    contact={"name": "정동현 (DongHyun Jung)", "email": "nawadri999@gmail.com"},
+    license_info={"name": "Academic project — SW Design 최종 과제"},
+)
 
 # Rate limiting
 app.state.limiter = limiter
@@ -72,12 +110,13 @@ async def ratelimit_handler(request: Request, exc: RateLimitExceeded):
     return response
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"], summary="Liveness probe")
 async def health_check():
+    """프로세스 생존만 확인 (DB 미접근). 무중단 배포 시 컨테이너 재시작 판단용."""
     return {"status": "ok"}
 
 
-@app.get("/ready")
+@app.get("/ready", tags=["health"], summary="Readiness probe")
 async def readiness_check(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))

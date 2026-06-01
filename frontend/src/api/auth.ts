@@ -40,6 +40,18 @@ export async function getMe(): Promise<User> {
   return data;
 }
 
+export async function oauthGoogleLogin(): Promise<{ authorize_url: string }> {
+  const { data } = await apiClient.get<{ authorize_url: string }>('/auth/oauth/google/login');
+  return data;
+}
+
+export async function oauthGoogleCallback(code: string, state: string): Promise<TokenResponse> {
+  const { data } = await apiClient.get<TokenResponse>('/auth/oauth/google/callback', {
+    params: { code, state },
+  });
+  return data;
+}
+
 export async function logout(): Promise<void> {
   await apiClient.post('/auth/logout');
 }

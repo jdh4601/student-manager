@@ -11,6 +11,9 @@ import {
   updatePreferences,
 } from '../api/notifications';
 import { useAuthStore } from '../stores/authStore';
+import { Card, CardHeader } from '../components/ui/Card';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
 
 const NOTIFICATION_LABELS: Record<string, string> = {
   grade_input: '성적 입력',
@@ -162,75 +165,89 @@ export default function NotificationsPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">알림</h1>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="font-display text-3xl font-semibold tracking-tight text-ink">알림</h1>
+          <p className="mt-1 text-sm text-ink-soft">성적·피드백·상담 활동 알림을 확인하세요.</p>
+        </div>
+        <Button variant="ghost" size="md" onClick={() => markAll.mutate()}>전체 읽음 처리</Button>
+      </div>
+
       {draftPreferences && (
-        <section className="border rounded p-3 space-y-2">
-          <h2 className="font-medium">알림 설정</h2>
-          <p className="text-sm text-gray-500">설정을 끄면 새 알림 수신이 중단되고, 현재 목록에서도 해당 유형이 숨겨집니다.</p>
-          <div className="flex items-center gap-2 text-sm">
-            <input
-              id="notification-grade-input"
-              type="checkbox"
-              checked={draftPreferences.grade_input}
-              onChange={() => togglePreference('grade_input')}
-            />
-            <label htmlFor="notification-grade-input">성적 입력 알림</label>
+        <Card>
+          <CardHeader title="알림 설정" subtitle="설정을 끄면 새 알림 수신이 중단되고, 현재 목록에서도 해당 유형이 숨겨집니다." />
+          <div className="mt-4 space-y-3">
+            <label className="flex items-center gap-2 text-sm text-ink" htmlFor="notification-grade-input">
+              <input
+                id="notification-grade-input"
+                type="checkbox"
+                className="h-4 w-4 accent-clay"
+                checked={draftPreferences.grade_input}
+                onChange={() => togglePreference('grade_input')}
+              />
+              성적 입력 알림
+            </label>
+            <label className="flex items-center gap-2 text-sm text-ink" htmlFor="notification-feedback-created">
+              <input
+                id="notification-feedback-created"
+                type="checkbox"
+                className="h-4 w-4 accent-clay"
+                checked={draftPreferences.feedback_created}
+                onChange={() => togglePreference('feedback_created')}
+              />
+              피드백 알림
+            </label>
+            <label className="flex items-center gap-2 text-sm text-ink" htmlFor="notification-counseling-updated">
+              <input
+                id="notification-counseling-updated"
+                type="checkbox"
+                className="h-4 w-4 accent-clay"
+                checked={draftPreferences.counseling_updated}
+                onChange={() => togglePreference('counseling_updated')}
+              />
+              상담 알림
+            </label>
+            <div className="flex justify-end">
+              <Button variant="primary" onClick={() => draftPreferences && savePreferences.mutate(draftPreferences)}>
+                설정 저장
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <input
-              id="notification-feedback-created"
-              type="checkbox"
-              checked={draftPreferences.feedback_created}
-              onChange={() => togglePreference('feedback_created')}
-            />
-            <label htmlFor="notification-feedback-created">피드백 알림</label>
-          </div>
-          <div className="flex items-center gap-2 text-sm">
-            <input
-              id="notification-counseling-updated"
-              type="checkbox"
-              checked={draftPreferences.counseling_updated}
-              onChange={() => togglePreference('counseling_updated')}
-            />
-            <label htmlFor="notification-counseling-updated">상담 알림</label>
-          </div>
-          <div className="flex justify-end">
-            <button
-              type="button"
-              className="border px-3 py-1 rounded text-sm"
-              onClick={() => draftPreferences && savePreferences.mutate(draftPreferences)}
-            >
-              설정 저장
-            </button>
-          </div>
-        </section>
+        </Card>
       )}
-      <button className="border px-3 py-1 rounded" onClick={() => markAll.mutate()}>전체 읽음 처리</button>
+
       {(!data || data.length === 0) ? (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-lg">알림이 없습니다</p>
-          <p className="text-sm mt-1">새로운 알림이 오면 여기에 표시됩니다.</p>
-        </div>
+        <Card className="text-center text-muted">
+          <p className="text-lg text-ink-soft">알림이 없습니다</p>
+          <p className="mt-1 text-sm">새로운 알림이 오면 여기에 표시됩니다.</p>
+        </Card>
       ) : visibleNotifications.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-lg">현재 설정으로 표시할 알림이 없어요</p>
-          <p className="text-sm mt-1">알림 설정을 다시 켜면 숨겨진 알림을 바로 볼 수 있습니다.</p>
-        </div>
+        <Card className="text-center text-muted">
+          <p className="text-lg text-ink-soft">현재 설정으로 표시할 알림이 없어요</p>
+          <p className="mt-1 text-sm">알림 설정을 다시 켜면 숨겨진 알림을 바로 볼 수 있습니다.</p>
+        </Card>
       ) : (
-        <section className="flex h-[36rem] flex-col">
+        <Card flush className="flex h-[36rem] flex-col p-5 sm:p-6">
           <ul className="flex-1 space-y-2 overflow-y-auto pr-1">
             {paginatedNotifications.map((notification) => (
-              <li key={notification.id} className={`border p-2 rounded ${notification.is_read ? 'opacity-60' : ''}`}>
-                <div className="text-xs text-gray-600">{new Date(notification.created_at).toLocaleString()}</div>
-                <div className="mt-1 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
-                  {NOTIFICATION_LABELS[notification.type] ?? '알림'}
+              <li
+                key={notification.id}
+                className={`rounded-xl border border-line p-3 transition-colors ${notification.is_read ? 'opacity-60' : 'bg-clay-wash/30'}`}
+              >
+                <div className="flex items-center gap-2">
+                  <Badge variant={notification.is_read ? 'neutral' : 'accent'}>
+                    {NOTIFICATION_LABELS[notification.type] ?? '알림'}
+                  </Badge>
+                  <span className="text-xs text-muted">{new Date(notification.created_at).toLocaleString()}</span>
                 </div>
-                <div className="mt-1 text-sm text-gray-800">{formatNotificationMessage(notification)}</div>
-                {!notification.is_read && (
-                  <button className="mt-1 text-blue-600 underline text-xs" onClick={() => markOne.mutate(notification.id)}>읽음</button>
-                )}
-                <button className="mt-1 ml-3 text-blue-600 underline text-xs" onClick={() => openNotification(notification)}>관련 화면으로 이동</button>
+                <div className="mt-1.5 text-sm text-ink">{formatNotificationMessage(notification)}</div>
+                <div className="mt-1.5 flex items-center gap-3 text-xs font-medium text-clay-ink">
+                  {!notification.is_read && (
+                    <button className="hover:underline" onClick={() => markOne.mutate(notification.id)}>읽음</button>
+                  )}
+                  <button className="hover:underline" onClick={() => openNotification(notification)}>관련 화면으로 이동</button>
+                </div>
               </li>
             ))}
           </ul>
@@ -239,17 +256,17 @@ export default function NotificationsPage() {
               <button
                 type="button"
                 aria-label="이전 페이지"
-                className="inline-flex h-8 w-8 items-center justify-center rounded border text-sm disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-surface text-sm text-ink transition-colors hover:bg-surface-soft disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
               >
                 ←
               </button>
-              <span className="text-sm text-gray-500">{currentPage} / {totalPages}</span>
+              <span className="text-sm text-ink-soft">{currentPage} / {totalPages}</span>
               <button
                 type="button"
                 aria-label="다음 페이지"
-                className="inline-flex h-8 w-8 items-center justify-center rounded border text-sm disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-surface text-sm text-ink transition-colors hover:bg-surface-soft disabled:cursor-not-allowed disabled:opacity-40"
                 disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
               >
@@ -257,7 +274,7 @@ export default function NotificationsPage() {
               </button>
             </div>
           )}
-        </section>
+        </Card>
       )}
     </div>
   );

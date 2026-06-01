@@ -74,7 +74,7 @@ export default function LandingPage() {
     if (lang === 'ko') {
       return {
         login: '로그인',
-        headline: <><span className="text-blue-600">학생 데이터</span>를 다루는<br/>가장 우아한 방법.</>,
+        headline: <><span className="text-clay-ink">학생 데이터</span>를 다루는<br/>가장 우아한 방법.</>,
         desc: '성적, 학생부, 그리고 교사 간의 긴밀한 상담 내역까지.\n하나의 통합된 공간에서 직관적으로 관리하세요.',
         demoBtn: '데모 신청하기',
         
@@ -102,7 +102,7 @@ export default function LandingPage() {
     }
     return {
       login: 'Log in',
-      headline: <><span className="text-blue-600">Student data</span><br/>managed elegantly.</>,
+      headline: <><span className="text-clay-ink">Student data</span><br/>managed elegantly.</>,
       desc: 'Grades, records, and precise teacher counseling workflows.\nManage everything intuitively in one unified workspace.',
       demoBtn: 'Book a demo',
       
@@ -130,22 +130,23 @@ export default function LandingPage() {
   }, [lang]);
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-blue-100 selection:text-blue-900 overflow-x-hidden">
+    <div className="min-h-screen bg-canvas text-ink font-sans selection:bg-clay-wash selection:text-clay-ink overflow-x-hidden">
       {/* Navigation */}
-      <header className="px-6 py-4 flex items-center justify-between max-w-6xl mx-auto w-full sticky top-0 bg-gray-50/80 backdrop-blur-md z-50">
-        <div className="font-semibold tracking-tighter text-2xl text-gray-900 select-none">
-          ClassFlow
+      <header className="px-6 py-4 flex items-center justify-between max-w-6xl mx-auto w-full sticky top-0 bg-canvas/80 backdrop-blur-md z-50">
+        <div className="flex items-center select-none">
+          <span className="font-bold tracking-tight text-xl text-ink">ClassFlow</span>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <button
             onClick={() => setLang(lang === 'ko' ? 'en' : 'ko')}
-            className="text-sm font-medium text-gray-400 hover:text-gray-900 transition-colors"
+            className="text-sm font-semibold text-muted hover:text-ink transition-colors px-2"
           >
             {lang === 'ko' ? 'EN' : 'KO'}
           </button>
           <button
             onClick={() => navigate('/login')}
-            className="text-sm font-medium px-5 py-2 bg-white border border-gray-200 rounded-full shadow-sm hover:shadow-md transition-all text-gray-800"
+            aria-label="Login"
+            className="text-sm font-medium px-5 py-2 bg-surface border border-line rounded-full shadow-pill hover:border-clay-soft hover:shadow-card transition-all text-ink"
           >
             {t.login}
           </button>
@@ -153,19 +154,19 @@ export default function LandingPage() {
       </header>
 
       <main className="max-w-6xl mx-auto px-6">
-        
+
         {/* Full Viewport Hero Section */}
         <div className="min-h-[calc(100vh-76px)] flex items-center justify-center -mt-10">
           <section className="text-center max-w-3xl mx-auto animate-in fade-in slide-in-from-bottom-8 duration-1000 w-full">
-            <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-gray-900 leading-[1.2] whitespace-pre-wrap mb-6">
+            <h1 className="font-display text-4xl md:text-6xl font-semibold tracking-tight text-ink leading-[1.2] whitespace-pre-wrap mb-6">
               {t.headline}
             </h1>
-            <p className="text-lg md:text-xl text-gray-500 mb-10 whitespace-pre-wrap leading-relaxed">
+            <p className="text-lg md:text-xl text-ink-soft mb-10 whitespace-pre-wrap leading-relaxed">
               {t.desc}
             </p>
             <div className="flex justify-center">
               <button
-                className="px-8 py-4 bg-gray-900 text-white rounded-full font-semibold shadow-lg hover:bg-gray-800 hover:scale-105 transition-all duration-300 transform"
+                className="px-8 py-4 bg-clay text-white rounded-full font-semibold shadow-card hover:bg-clay-ink hover:scale-105 transition-all duration-300 transform"
                 onClick={() => window.alert('Demo booking placeholder')}
               >
                 {t.demoBtn}
@@ -181,18 +182,18 @@ export default function LandingPage() {
           <FadeInSection direction="left">
             <div className="flex flex-col md:flex-row items-center gap-12">
               <div className="md:w-1/2 flex flex-col items-start text-left">
-                <h3 className="font-bold text-3xl md:text-4xl text-gray-900 mb-4">{t.feature1_title}</h3>
-                <p className="text-lg text-gray-500 leading-relaxed max-w-md">{t.feature1_desc}</p>
+                <h3 className="font-display font-semibold text-3xl md:text-4xl text-ink mb-4">{t.feature1_title}</h3>
+                <p className="text-lg text-ink-soft leading-relaxed max-w-md">{t.feature1_desc}</p>
               </div>
               <div className="md:w-1/2 flex justify-center w-full">
                 <div className="w-full max-w-md h-64 md:h-80 hover:scale-105 transition-transform duration-500">
                   <ResponsiveContainer width="100%" height="100%">
                     <RadarChart cx="50%" cy="50%" outerRadius="80%" data={lang === 'ko' ? radarData : radarDataEn}>
-                      <PolarGrid stroke="#e5e7eb" />
-                      <PolarAngleAxis dataKey="subject" tick={{ fill: '#6b7280', fontSize: 13 }} />
+                      <PolarGrid stroke="#EBE5DB" />
+                      <PolarAngleAxis dataKey="subject" tick={{ fill: '#6B6258', fontSize: 13 }} />
                       <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                      <Radar name="Previous" dataKey="prevScore" stroke="#f97316" strokeWidth={2} strokeDasharray="3 3" fill="#fdba74" fillOpacity={0.15} />
-                      <Radar name="Current" dataKey="score" stroke="#2563eb" strokeWidth={2} fill="#3b82f6" fillOpacity={0.15} />
+                      <Radar name="Previous" dataKey="prevScore" stroke="#B8AEA1" strokeWidth={2} strokeDasharray="3 3" fill="#CFC4B5" fillOpacity={0.15} />
+                      <Radar name="Current" dataKey="score" stroke="#BD5D3A" strokeWidth={2.5} fill="#BD5D3A" fillOpacity={0.18} />
                     </RadarChart>
                   </ResponsiveContainer>
                 </div>
@@ -204,26 +205,26 @@ export default function LandingPage() {
           <FadeInSection direction="right">
             <div className="flex flex-col md:flex-row-reverse items-center gap-12">
               <div className="md:w-1/2 flex flex-col items-start md:items-end text-left md:text-right">
-                <h3 className="font-bold text-3xl md:text-4xl text-gray-900 mb-4">{t.feature2_title}</h3>
-                <p className="text-lg text-gray-500 leading-relaxed max-w-md">{t.feature2_desc}</p>
+                <h3 className="font-display font-semibold text-3xl md:text-4xl text-ink mb-4">{t.feature2_title}</h3>
+                <p className="text-lg text-ink-soft leading-relaxed max-w-md">{t.feature2_desc}</p>
               </div>
               <div className="md:w-1/2 flex justify-center w-full">
-                <div className="w-full max-w-sm bg-white rounded-2xl p-6 border border-gray-100 hover:shadow-lg transition-all duration-500 hover:-translate-y-2 cursor-default">
+                <div className="w-full max-w-sm bg-surface rounded-2xl p-6 border border-line shadow-card hover:shadow-card-hover transition-all duration-500 hover:-translate-y-2 cursor-default">
                   <div className="flex items-center gap-4 mb-6">
-                    <div className="w-14 h-14 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xl flex-shrink-0">MK</div>
+                    <div className="w-14 h-14 rounded-full bg-clay-wash flex items-center justify-center text-clay-ink font-bold text-xl flex-shrink-0">MK</div>
                     <div className="text-left">
-                      <p className="text-lg font-bold text-gray-900">{t.feature2_name}</p>
-                      <p className="text-sm text-gray-500">{t.feature2_info}</p>
+                      <p className="text-lg font-bold text-ink">{t.feature2_name}</p>
+                      <p className="text-sm text-ink-soft">{t.feature2_info}</p>
                     </div>
                   </div>
                   <div className="space-y-3">
-                    <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-xl border border-gray-100">
-                      <div className="w-2 h-2 rounded-full bg-emerald-400"></div>
-                      <p className="text-sm font-medium text-gray-700">{t.feature2_stat1}</p>
+                    <div className="flex items-center gap-3 bg-surface-soft p-3 rounded-xl border border-line-soft">
+                      <div className="w-2 h-2 rounded-full bg-positive"></div>
+                      <p className="text-sm font-medium text-ink-soft">{t.feature2_stat1}</p>
                     </div>
-                    <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-xl border border-gray-100">
-                      <div className="w-2 h-2 rounded-full bg-blue-400"></div>
-                      <p className="text-sm font-medium text-gray-700">{t.feature2_stat2}</p>
+                    <div className="flex items-center gap-3 bg-surface-soft p-3 rounded-xl border border-line-soft">
+                      <div className="w-2 h-2 rounded-full bg-clay"></div>
+                      <p className="text-sm font-medium text-ink-soft">{t.feature2_stat2}</p>
                     </div>
                   </div>
                 </div>
@@ -235,20 +236,20 @@ export default function LandingPage() {
           <FadeInSection direction="left">
             <div className="flex flex-col md:flex-row items-center gap-12">
               <div className="md:w-1/2 flex flex-col items-start text-left">
-                <h3 className="font-bold text-3xl md:text-4xl text-gray-900 mb-4">{t.feature3_title}</h3>
-                <p className="text-lg text-gray-500 leading-relaxed max-w-md">{t.feature3_desc}</p>
+                <h3 className="font-display font-semibold text-3xl md:text-4xl text-ink mb-4">{t.feature3_title}</h3>
+                <p className="text-lg text-ink-soft leading-relaxed max-w-md">{t.feature3_desc}</p>
               </div>
               <div className="md:w-1/2 flex justify-center w-full">
                 <div className="flex flex-col gap-4 w-full max-w-sm hover:-translate-y-2 transition-transform duration-500 cursor-default">
-                  <div className="px-5 py-4 bg-emerald-50 text-emerald-800 rounded-2xl border border-emerald-100 font-medium flex justify-between items-center shadow-sm">
+                  <div className="px-5 py-4 bg-positive/10 text-positive rounded-2xl border border-positive/20 font-medium flex justify-between items-center shadow-pill">
                     {t.feature3_badge1}
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                   </div>
-                  <div className="px-5 py-4 bg-indigo-50 text-indigo-800 rounded-2xl border border-indigo-100 font-medium flex justify-between items-center shadow-sm">
+                  <div className="px-5 py-4 bg-clay-wash text-clay-ink rounded-2xl border border-clay-soft/30 font-medium flex justify-between items-center shadow-pill">
                     {t.feature3_badge2}
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                   </div>
-                  <div className="px-5 py-4 bg-amber-50 text-amber-800 rounded-2xl border border-amber-100 font-medium flex justify-between items-center shadow-sm">
+                  <div className="px-5 py-4 bg-surface-soft text-ink-soft rounded-2xl border border-line font-medium flex justify-between items-center shadow-pill">
                     {t.feature3_badge3}
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
                   </div>
@@ -261,24 +262,24 @@ export default function LandingPage() {
           <FadeInSection direction="right">
             <div className="flex flex-col md:flex-row-reverse items-center gap-12">
               <div className="md:w-1/2 flex flex-col items-start md:items-end text-left md:text-right">
-                <h3 className="font-bold text-3xl md:text-4xl text-gray-900 mb-4">{t.feature4_title}</h3>
-                <p className="text-lg text-gray-500 leading-relaxed max-w-md">{t.feature4_desc}</p>
+                <h3 className="font-display font-semibold text-3xl md:text-4xl text-ink mb-4">{t.feature4_title}</h3>
+                <p className="text-lg text-ink-soft leading-relaxed max-w-md">{t.feature4_desc}</p>
               </div>
               <div className="md:w-1/2 flex justify-center w-full">
                 <div className="w-full max-w-sm space-y-4 hover:-translate-y-2 transition-transform duration-500 cursor-default">
                   {/* Bubble 1 */}
                   <div className="flex gap-3 items-end">
-                    <div className="w-8 h-8 rounded-full bg-blue-200 flex-shrink-0 mb-1"></div>
-                    <div className="bg-white text-gray-800 px-5 py-4 rounded-2xl rounded-bl-sm text-sm border border-gray-100 shadow-sm leading-relaxed text-left">
+                    <div className="w-8 h-8 rounded-full bg-surface-soft border border-line flex-shrink-0 mb-1"></div>
+                    <div className="bg-surface text-ink px-5 py-4 rounded-2xl rounded-bl-sm text-sm border border-line shadow-card leading-relaxed text-left">
                       {t.feature4_msg1}
                     </div>
                   </div>
                   {/* Bubble 2 */}
                   <div className="flex gap-3 items-end justify-end">
-                    <div className="bg-blue-600 text-white px-5 py-4 rounded-2xl rounded-br-sm text-sm shadow-sm leading-relaxed text-right">
+                    <div className="bg-clay text-white px-5 py-4 rounded-2xl rounded-br-sm text-sm shadow-card leading-relaxed text-right">
                       {t.feature4_msg2}
                     </div>
-                    <div className="w-8 h-8 rounded-full bg-indigo-200 flex-shrink-0 mb-1"></div>
+                    <div className="w-8 h-8 rounded-full bg-clay-wash flex-shrink-0 mb-1"></div>
                   </div>
                 </div>
               </div>
@@ -289,13 +290,13 @@ export default function LandingPage() {
       </main>
       
       {/* Footer */}
-      <footer className="border-t border-gray-100 bg-white">
-        <div className="max-w-6xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-center gap-4 text-sm text-gray-400">
+      <footer className="border-t border-line bg-surface">
+        <div className="max-w-6xl mx-auto px-6 py-8 flex flex-col md:flex-row justify-between items-center gap-4 text-sm text-muted">
           <div>© 2026 Student Manager. All rights reserved.</div>
           <div className="flex gap-6">
-            <a href="#" className="hover:text-gray-600 transition-colors">Privacy</a>
-            <a href="#" className="hover:text-gray-600 transition-colors">Terms</a>
-            <a href="#" className="hover:text-gray-600 transition-colors">Contact</a>
+            <a href="#" className="hover:text-ink transition-colors">Privacy</a>
+            <a href="#" className="hover:text-ink transition-colors">Terms</a>
+            <a href="#" className="hover:text-ink transition-colors">Contact</a>
           </div>
         </div>
       </footer>

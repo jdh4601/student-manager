@@ -1,6 +1,6 @@
 """POST /api/v1/chat — 교사용 분석 챗봇 (REQ-080, REQ-081, Spec §10.4).
 
-흐름: 컨텍스트 조회 → `mask_context` (k≥5) → system prompt 구성 →
+흐름: 컨텍스트 조회 → `mask_context` (PII 토큰 치환) → system prompt 구성 →
 LLM 호출 → 응답 후처리(토큰 → 실제 학생).
 """
 
@@ -19,7 +19,7 @@ from app.schemas.chat import ChatRequest, ChatResponse, StudentRef
 from app.services.chat_context import ChatContextRepo, get_chat_context_repo
 from app.services.chat_intent import resolve_semester_id
 from app.services.llm_client import LlmClient, get_llm_client
-from app.services.llm_sanitizer import SmallSampleError, mask_context
+from app.services.llm_sanitizer import mask_context
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -29,10 +29,6 @@ _SYSTEM_PROMPT = (
     "당신은 한국어 학교 데이터 분석 비서입니다. "
     "아래 마스킹된 학급 통계만을 근거로 답하세요. "
     "마스킹된 토큰(학생A, 학생B…) 외의 학생명을 임의로 만들어내지 마세요."
-)
-
-_SMALL_SAMPLE_REPLY = (
-    "개인 식별을 막기 위해 5명 미만 표본에 대한 분석은 거부합니다."
 )
 
 
@@ -61,14 +57,7 @@ async def post_chat(
 
     name_by_id = {row["student_id"]: row["student_name"] for row in rows}
 
-    try:
-        masked_rows, token_map = mask_context(rows)
-    except SmallSampleError:
-        return ChatResponse(
-            thread_id=body.thread_id or uuid.uuid4(),
-            reply=_SMALL_SAMPLE_REPLY,
-            referenced_students=[],
-        )
+    masked_rows, token_map = mask_context(rows)
 
     system_prompt = (
         f"{_SYSTEM_PROMPT}\n\n[학급 통계]\n"

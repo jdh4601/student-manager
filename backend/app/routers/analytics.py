@@ -125,7 +125,11 @@ async def get_class_distribution(
 ) -> ClassDistributionResponse:
     cid = uuid.UUID(class_id)
     sub = uuid.UUID(subject_id)
-    sem = uuid.UUID(semester_id) if semester_id else None
+    # Default to the most recent semester (latest year/term) so the chart
+    # always reflects a single, current term — mirrors the teacher dashboard.
+    # Without this the repo would aggregate every semester and double-count a
+    # student who has grades in more than one.
+    sem = uuid.UUID(semester_id) if semester_id else await current_semester_id(db)
 
     await _assert_teacher_owns_class(db, class_id=cid, teacher=current_user)
 

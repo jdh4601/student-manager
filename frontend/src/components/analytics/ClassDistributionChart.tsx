@@ -15,6 +15,19 @@ interface Props {
   semesterId?: string;
 }
 
+const CLAY = '#BD5D3A';
+
+function EmptyState({ children, testId }: { children: string; testId?: string }) {
+  return (
+    <div
+      className="flex h-[240px] items-center justify-center rounded-xl border border-dashed border-line bg-surface-soft/50 px-4 text-center text-sm text-muted"
+      data-testid={testId}
+    >
+      {children}
+    </div>
+  );
+}
+
 export default function ClassDistributionChart({
   classId,
   subjectId,
@@ -24,47 +37,93 @@ export default function ClassDistributionChart({
 
   if (!classId || !subjectId) {
     return (
-      <p className="text-sm text-gray-400" data-testid="distribution-placeholder">
+      <EmptyState testId="distribution-placeholder">
         학급과 과목을 선택해 분포를 확인하세요.
-      </p>
+      </EmptyState>
     );
   }
   if (isLoading) {
-    return <p className="text-sm text-gray-500">분포를 불러오는 중...</p>;
+    return <EmptyState>분포를 불러오는 중…</EmptyState>;
   }
   if (error) {
     return (
-      <p className="text-sm text-red-600" role="alert">
+      <p className="text-sm text-negative" role="alert">
         분포 데이터를 가져올 수 없습니다.
       </p>
     );
   }
   if (!data || data.total_students === 0) {
-    return (
-      <p className="text-sm text-gray-400">
-        해당 과목·학기의 분포 데이터가 아직 없습니다.
-      </p>
-    );
+    return <EmptyState>해당 과목·학기의 분포 데이터가 아직 없습니다.</EmptyState>;
   }
 
   return (
     <div data-testid="distribution-chart">
-      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-gray-600 mb-2">
-        <span>학생 {data.total_students}명</span>
-        <span>평균 {data.mean?.toFixed(1) ?? '—'}</span>
-        <span>중앙값 {data.median?.toFixed(1) ?? '—'}</span>
+      <div className="mb-3 flex flex-wrap gap-2 text-xs">
+        <Chip label="학생" value={`${data.total_students}명`} />
+        <Chip label="평균" value={data.mean?.toFixed(1) ?? '—'} accent />
+        <Chip label="중앙값" value={data.median?.toFixed(1) ?? '—'} />
       </div>
       <div style={{ width: '100%', height: 240 }}>
         <ResponsiveContainer>
-          <BarChart data={data.buckets} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="range" fontSize={11} />
-            <YAxis allowDecimals={false} fontSize={11} />
-            <Tooltip />
-            <Bar dataKey="count" fill="#4f46e5" />
+          <BarChart
+            data={data.buckets}
+            margin={{ top: 8, right: 8, left: -16, bottom: 0 }}
+            barCategoryGap="10%"
+          >
+            <defs>
+              <linearGradient id="clayBar" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CLAY} stopOpacity={0.95} />
+                <stop offset="100%" stopColor={CLAY} stopOpacity={0.55} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="#EBE5DB" vertical={false} />
+            <XAxis
+              dataKey="range"
+              fontSize={11}
+              tickLine={false}
+              axisLine={{ stroke: '#EBE5DB' }}
+              tick={{ fill: '#9A9189' }}
+            />
+            <YAxis
+              allowDecimals={false}
+              fontSize={11}
+              tickLine={false}
+              axisLine={false}
+              tick={{ fill: '#9A9189' }}
+            />
+            <Tooltip
+              cursor={{ fill: 'rgba(217,142,111,0.12)' }}
+              contentStyle={{
+                borderRadius: 12,
+                border: '1px solid #EBE5DB',
+                boxShadow: '0 8px 24px -12px rgba(38,33,27,0.2)',
+                fontSize: 12,
+              }}
+              labelStyle={{ color: '#26211B', fontWeight: 600 }}
+            />
+            <Bar
+              dataKey="count"
+              name="학생 수"
+              fill="url(#clayBar)"
+              radius={[6, 6, 0, 0]}
+              maxBarSize={48}
+            />
           </BarChart>
         </ResponsiveContainer>
       </div>
     </div>
+  );
+}
+
+function Chip({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 ${
+        accent ? 'bg-clay-wash text-clay-ink' : 'bg-surface-soft text-ink-soft'
+      }`}
+    >
+      <span className="text-muted">{label}</span>
+      <span className="font-semibold tnum">{value}</span>
+    </span>
   );
 }

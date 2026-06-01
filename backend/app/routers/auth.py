@@ -1,3 +1,4 @@
+import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -31,7 +32,12 @@ from app.services.auth import (
     reset_password,
 )
 from app.services.auth_delivery import build_frontend_auth_link, deliver_auth_link
-from app.utils.security import create_access_token, decode_token, hash_password
+from app.services.oauth import (
+    GoogleOAuthClient,
+    get_oauth_client,
+    login_or_create_teacher,
+)
+from app.utils.security import create_access_token, decode_token, generate_opaque_token, hash_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -95,6 +101,57 @@ async def refresh(request: Request, db: AsyncSession = Depends(get_db)):
 @router.post("/logout", status_code=204)
 async def logout(response: Response):
     _clear_refresh_cookie(response)
+
+
+_OAUTH_STATE_COOKIE = "oauth_state"
+
+
+@router.get("/oauth/google/login", summary="교사 Google OAuth 시작")
+async def oauth_google_login(
+    response: Response,
+    oauth: GoogleOAuthClient = Depends(get_oauth_client),
+):
+    """authorize_url 발급 + CSRF 방지용 state를 HttpOnly 쿠키에 바인딩."""
+    state = generate_opaque_token()
+    response.set_cookie(
+        key=_OAUTH_STATE_COOKIE,
+        value=state,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",  # OAuth 리다이렉트(타사이트 진입)에서 쿠키가 전송되도록 lax
+        max_age=600,
+        path=settings.cookie_path,
+    )
+    return {"authorize_url": oauth.authorize_url(state=state)}
+
+
+@router.get("/oauth/google/callback", response_model=TokenResponse, summary="교사 Google OAuth 콜백")
+async def oauth_google_callback(
+    request: Request,
+    response: Response,
+    code: str,
+    state: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    oauth: GoogleOAuthClient = Depends(get_oauth_client),
+):
+    """state 검증(login CSRF 방지) → code 교환 → edu 도메인 검증 → 교사 upsert → 토큰 발급."""
+    cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE)
+    if not state or not cookie_state or not secrets.compare_digest(state, cookie_state):
+        raise AppException(400, "잘못된 OAuth 요청입니다 (state 불일치).", "AUTH_OAUTH_STATE_MISMATCH")
+    response.delete_cookie(_OAUTH_STATE_COOKIE, path=settings.cookie_path)
+
+    profile = await oauth.exchange_code(code)
+    user = await login_or_create_teacher(db, profile)
+    if not user.is_active:
+        raise AppException(401, "비활성화된 계정입니다.", "AUTH_ACCOUNT_INACTIVE")
+    access_token, refresh_token = create_tokens(user)
+    _set_refresh_cookie(response, refresh_token)
+    return TokenResponse(
+        access_token=access_token,
+        role=user.role,
+        user_id=str(user.id),
+        name=user.name,
+    )
 
 
 @router.get("/me", response_model=MeResponse)
