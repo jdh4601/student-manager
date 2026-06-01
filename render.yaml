@@ -53,6 +53,9 @@ services:
         sync: false
       - key: GOOGLE_REDIRECT_URI
         sync: false # <vercel-frontend-url>/auth/oauth/google/callback
+      # AI 교사 챗봇 (REQ — POST /api/v1/chat). 키 미설정 시 auto 모드가 stub으로 폴백.
+      - key: OPENAI_API_KEY
+        sync: false # 시크릿. 대시보드에서 값 입력 (sk-proj-...)
       - key: RUN_SEED
         value: "1"
       - key: APP_BASE_URL
