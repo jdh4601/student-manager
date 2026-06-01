@@ -118,7 +118,9 @@ async def oauth_google_login(
         value=state,
         httponly=True,
         secure=settings.cookie_secure,
-        samesite="lax",  # OAuth 리다이렉트(타사이트 진입)에서 쿠키가 전송되도록 lax
+        # 크로스사이트 배포(FE/BE 도메인 분리)에선 콜백이 cross-site XHR이라
+        # SameSite=None이어야 oauth_state 쿠키가 실린다. refresh 쿠키와 동일 정책.
+        samesite=settings.cookie_samesite,
         max_age=600,
         path=settings.cookie_path,
     )
