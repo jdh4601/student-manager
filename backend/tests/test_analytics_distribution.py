@@ -10,6 +10,7 @@ from app.dependencies.analytics import get_class_distribution_repo
 from app.main import app
 from app.models import Class, Semester, Subject
 from app.services.analytics_query import bucketize, median
+from app.services.semester import current_semester_id
 from tests.conftest import async_session_test
 
 
@@ -105,31 +106,31 @@ async def test_distribution_returns_buckets_and_stats(
 
 
 @pytest.mark.asyncio
-async def test_distribution_defaults_to_latest_semester(
+async def test_distribution_defaults_to_current_semester(
     auth_client_teacher: AsyncClient, seed_teacher, fake_dist_repo: _FakeDistRepo
 ):
-    """No semester_id → query the most recent semester, not all semesters.
+    """No semester_id → scope to the calendar-current semester, not all semesters.
 
-    Mirrors the teacher-dashboard contract: omitting ``semester_id`` must
-    scope the distribution to ``current_semester_id`` (latest year/term) so a
-    student with grades in several semesters is counted once, in the newest.
+    Omitting ``semester_id`` must delegate to ``current_semester_id`` (the
+    calendar-current term, e.g. 1학기 in June) — never None (all semesters) and
+    never the highest term number. Otherwise grades entered for the live term
+    are hidden behind an empty future semester. Which term is "current" is
+    covered deterministically in ``test_semester.py``.
     """
     cls, sem_2026_1, subj = await _bootstrap(seed_teacher, seed_teacher.school_id)
     async with async_session_test() as session:
-        older = Semester(year=2025, term=1)
-        latest = Semester(year=2026, term=2)
-        session.add_all([older, latest])
+        session.add_all([Semester(year=2025, term=1), Semester(year=2026, term=2)])
         await session.commit()
-        await session.refresh(latest)
-        latest_id = latest.id
+        expected = await current_semester_id(session)
 
     res = await auth_client_teacher.get(
         f"/api/v1/analytics/classes/{cls.id.hex}/distribution",
         params={"subject_id": subj.id.hex},  # semester_id intentionally omitted
     )
     assert res.status_code == 200, res.text
-    # The repo must be scoped to the latest semester — never None (all semesters).
-    assert fake_dist_repo.calls[-1][2] == latest_id
+    # Scoped to the current semester — never None (which would mean all semesters).
+    assert fake_dist_repo.calls[-1][2] is not None
+    assert fake_dist_repo.calls[-1][2] == expected
 
 
 @pytest.mark.asyncio
