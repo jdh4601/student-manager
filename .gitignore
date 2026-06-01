@@ -7,6 +7,7 @@ __pycache__/
 backend/.omc/
 .env
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Python
 backend/.venv/
