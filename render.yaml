@@ -44,21 +44,21 @@ services:
       - key: ALLOW_OAUTH_STUB
         value: "false"
       - key: ALLOWED_TEACHER_DOMAINS
-        sync: false  # CSV e.g. "snu.ac.kr,example.edu"
+        sync: false # CSV e.g. "snu.ac.kr,example.edu"
       - key: OAUTH_DEFAULT_SCHOOL_ID
-        sync: false  # UUID of school new OAuth teachers join (demo)
+        sync: false # UUID of school new OAuth teachers join (demo)
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: GOOGLE_CLIENT_SECRET
         sync: false
       - key: GOOGLE_REDIRECT_URI
-        sync: false  # <vercel-frontend-url>/auth/oauth/google/callback
+        sync: false # <vercel-frontend-url>/auth/oauth/google/callback
       - key: RUN_SEED
         value: "1"
       - key: APP_BASE_URL
-        sync: false  # Set in dashboard: your Vercel frontend URL
+        sync: false # Set in dashboard: your Vercel frontend URL
       - key: ALLOWED_ORIGINS
-        sync: false  # Set in dashboard: ["https://your-vercel-url.vercel.app"]
+        sync: false # Set in dashboard: ["https://your-vercel-url.vercel.app"]
 
   # ─── Outbox CDC workers (ADR-003) ─────────────────────────────────────────
   # Background workers that drive the analytics pipeline:
@@ -70,7 +70,7 @@ services:
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
-    plan: starter  # Background Workers require paid tier (~$7/mo per worker)
+    plan: starter # Background Workers require paid tier (~$7/mo per worker)
     dockerCommand: python -m app.workers.outbox_publisher
     envVars:
       - key: PYTHONPATH
@@ -88,6 +88,7 @@ services:
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     plan: starter
+    numInstances: 3
     dockerCommand: python -m app.workers.analytics
     envVars:
       - key: PYTHONPATH
