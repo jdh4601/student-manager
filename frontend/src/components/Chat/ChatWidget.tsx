@@ -3,9 +3,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 
 const SUGGESTED_QUESTIONS = [
-  '이번 학기 우리 반 영어 평균이 어때?',
-  '최근에 점수가 가장 많이 떨어진 과목은?',
-  '이번 학기 우리 반 성적 분포 알려줘',
+  '1학기 우리 반 학생들의 영어 성적의 평균이 어때?',
+  '1학기 학생들의 전체 점수의 평균을 알려줘',
+  '1학기 학생들의 과학 점수의 중앙값을 알려줘',
 ];
 
 const LOADING_PHRASES = [
@@ -94,6 +94,13 @@ export default function ChatWidget({ autoFocus = false }: ChatWidgetProps) {
     await send(text);
   }
 
+  // 예시 프롬프트는 입력칸을 채우지 않고 곧바로 전송한다.
+  async function handleSuggested(question: string) {
+    if (isLoading) return;
+    setInput('');
+    await send(question);
+  }
+
   return (
     <div className="flex flex-col h-full min-h-0">
       <div
@@ -144,11 +151,9 @@ export default function ChatWidget({ autoFocus = false }: ChatWidgetProps) {
             <button
               key={q}
               type="button"
-              onClick={() => {
-                setInput(q);
-                inputRef.current?.focus();
-              }}
-              className="text-left text-xs text-gray-700 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-lg px-2.5 py-1.5 transition-colors"
+              disabled={isLoading}
+              onClick={() => handleSuggested(q)}
+              className="text-left text-xs text-gray-700 bg-blue-50 hover:bg-blue-100 border border-blue-100 rounded-lg px-2.5 py-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {q}
             </button>
