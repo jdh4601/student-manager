@@ -40,6 +40,10 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+    # Vercel는 배포마다 origin이 바뀐다(`frontend-<hash>-<team>.vercel.app`).
+    # 고정 도메인은 allowed_origins로, 그 외 우리 프로젝트의 Vercel URL은
+    # 정규식으로 일괄 허용한다. 환경변수 ALLOWED_ORIGIN_REGEX로 override 가능.
+    allowed_origin_regex: str | None = r"^https://frontend-[a-z0-9-]+\.vercel\.app$"
     # Cookie settings for refresh token
     refresh_cookie_name: str = "refresh_token"
     cookie_secure: bool = False
