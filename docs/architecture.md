@@ -265,7 +265,7 @@ Teacher Browser          fastapi-api : routers/auth.py        Google OAuth/OIDC
 |----------|-----------|-----------|------|
 | fastapi-api | docker-compose `--scale fastapi-api=N` + 앞단 nginx (옵션) | n/a (운영 사용자 0) | DB connection pool |
 | outbox-publisher | 단일 인스턴스가 기본. SKIP LOCKED 덕분에 다중 인스턴스도 안전 (이중 NOTIFY는 worker 측 SKIP LOCKED가 흡수) | n/a | 단일 publisher가 충분 (평가 규모) |
-| **analytics-worker** ★ | `SELECT FOR UPDATE SKIP LOCKED` 기반 cooperative claim | `docker-compose up --scale analytics-worker=3` 라이브 시연 — N개 워커가 동일 NOTIFY를 받지만 row lock으로 정확히 1개만 처리 | DB row-lock 경쟁 (평가 규모 ms 단위 무시 가능) |
+| **analytics-worker** ★ | `SELECT FOR UPDATE SKIP LOCKED` 기반 cooperative claim. 클라우드는 Render `numInstances: 3`(유료), 로컬은 `--scale` | 클라우드 실배포 3 인스턴스 + 로컬 `docker-compose up --scale analytics-worker=3` 라이브 시연 — N개 워커가 동일 NOTIFY를 받지만 row lock으로 정확히 1개만 처리 | DB row-lock 경쟁 (평가 규모 ms 단위 무시 가능) |
 | Postgres | 단일 인스턴스 (평가 규모에서 충분) | n/a | 평가 후 read replica 분리 |
 
 ★ analytics-worker scale=N 시연이 발표의 "확장성" narrative 핵심. **SKIP LOCKED 패턴 = Kafka consumer group 등가물** (production 사례: Sidekiq `bulk_dequeue`, oban `Oban.Job`).
@@ -359,7 +359,7 @@ Teacher Browser          fastapi-api : routers/auth.py        Google OAuth/OIDC
 
 | 환경 | 용도 | 컴포넌트 |
 |------|------|---------|
-| **cloud (Vercel + Render)** | 외부 접근 가능한 라이브 demo URL | Vercel(Frontend) + Render(API Web) + Render(outbox-publisher worker) + Render(analytics-worker worker) + Render Postgres |
+| **cloud (Vercel + Render)** | 외부 접근 가능한 라이브 demo URL | Vercel(Frontend) + Render(API Web) + Render(outbox-publisher worker, single) + Render(analytics-worker worker, `numInstances: 3` 유료) + Render Postgres |
 | **local-dev (docker-compose.yml)** | 일상 개발 | 위 5개 컴포넌트 동등 + Vite dev server |
 | **local-demo (docker-compose.demo.yml)** | 발표 시연 (scale 옵션 포함) | local-dev + 시드 데이터 + `--scale analytics-worker=3` |
 
@@ -379,7 +379,7 @@ make demo-scale          # docker-compose up --scale analytics-worker=3
 
 **왜 두 surface?**
 - 클라우드 Render는 외부 reviewer가 발표 후 접속할 수 있는 라이브 URL 제공 (Vercel + Render free tier 활용)
-- 로컬 docker-compose는 `--scale analytics-worker=3` 같은 분산 시연을 reviewer 앞에서 즉시 실행 가능 (Render free tier에서는 worker 다중 인스턴스 비용 + cold start 부담)
+- 클라우드 Render는 `render.yaml`의 `numInstances: 3`(유료 worker 플랜)으로 analytics-worker를 **실제 3개 인스턴스로 운영** — SKIP LOCKED 분배가 클라우드에서도 그대로 동작. 로컬 docker-compose는 `--scale analytics-worker=3`으로 reviewer 앞에서 동일 분배를 **즉석 로그와 함께** 보여주는 용도 (네트워크 의존 없이 빠른 시연)
 - 두 환경에서 동일 코드, 동일 컴포넌트 토폴로지, 동일 마이그레이션. 분기는 환경변수만 차이
 
 **롤백**: 로컬은 `docker-compose down -v && make up`. 클라우드는 Render 이전 배포로 redeploy (Render dashboard 1-click). DB 마이그레이션은 평가 종료까지 forward-only.
