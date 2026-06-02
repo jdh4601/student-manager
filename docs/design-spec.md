@@ -9,7 +9,7 @@
 - v1.0 → v2.0: Critic 리뷰 반영
 - v2.0 → v2.1: §1 docker-compose 로컬 인프라, §9 Outbox+Kafka 기반 Analytics Layer, §10 단일 엔드포인트 챗봇
 - v2.1 → v2.2: ADR-003 반영 — Kafka 제거, Postgres LISTEN/NOTIFY + SKIP LOCKED로 §9 CDC 메커니즘 교체. 클라우드 surface (Vercel + Render Worker × 2) 추가.
-- v2.2 → v2.3: 발표 보완 5종 반영 — 교사 Google OAuth(§3.1.1) · 무중단 배포 헬스 probe(§3.10) · OpenAPI 명세 산출 강화(§3 머리말) · 테스트 피라미드 실측(§8.5). (②④는 프로세스/산출물 항목으로 `docs/notes/` 참조)
+- v2.2 → v2.3: 발표 보완 5종 반영 — 교사 Google OAuth(§3.1.1) · 무중단 배포 헬스 probe(§3.10) · OpenAPI 명세 산출 강화(§3 머리말) · 테스트 피라미드 실측(§8.5).
 
 ---
 
@@ -875,7 +875,7 @@ Response 200: { "status": "ready" }
 Response 503: { "code": "DB_NOT_READY", "detail": "데이터베이스 준비가 되지 않았습니다." }
 검증: SELECT 1로 DB 연결 확인. 실패 시 503 → LB가 트래픽 제외 (재시작 아님)
 용도: 롤링 배포 시 신 인스턴스가 ready가 된 후에만 트래픽 수신 (maxUnavailable=0).
-      Render는 healthCheckPath로, 예시 K8s(`deploy/k8s/`)는 readinessProbe로 동일 의미론.
+      Render는 healthCheckPath로 readinessProbe 의미론을 구현.
 ```
 
 ---
@@ -1197,7 +1197,7 @@ GET /grades/{student_id}/summary?semester_ids=uuid1,uuid2
 | 통합 (integration) | testcontainers 실 Postgres, `backend/tests/integration/` | `pytest -m integration` | outbox→publisher→worker→`analytics.*` 정합성, SKIP LOCKED scale=3 중복 0, idempotency |
 | E2E | Playwright, `frontend/e2e/*.spec.ts` | 11 spec | 로그인·성적·피드백·분석 RBAC·챗봇 PII 마스킹·모바일 반응형 |
 
-> Frontend 컴포넌트 단위 테스트는 호스트 환경 이슈(Node 25 ≠ vitest 1.6 + Linux node_modules 바이너리)로 일시 보류 — 근본 원인·해결 명령은 `docs/notes/frontend-test-env-fix.md`. E2E가 frontend 동작을 실 브라우저로 검증하므로 평가 신뢰성은 확보. 발표 서사는 `docs/notes/test-pyramid-presentation.md`.
+> Frontend 컴포넌트 단위 테스트는 호스트 환경 이슈(Node 25 ≠ vitest 1.6 + Linux node_modules 바이너리)로 일시 보류 — E2E가 frontend 동작을 실 브라우저로 검증하므로 평가 신뢰성은 확보.
 
 ---
 

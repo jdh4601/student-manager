@@ -1,7 +1,7 @@
 # PRD: 학생 성적 및 상담 관리 시스템 (교사용 SaaS)
 
 **버전**: 2.2  **최종 업데이트**: 2026-05-31  **상태**: 확정
-**v2.2 변경 (발표 보완 5종)**: ① OpenAPI/Swagger 명세 정비(§6.3) · ② 테스트 피라미드 실측(§6.4) · ③ 무중단 배포 probe + 예시 K8s(§7, §8) · ④ Agile/Jira 발표 산출물 · ⑤ 교사 Google OAuth(REQ-006)
+**v2.2 변경 (발표 보완 5종)**: ① OpenAPI/Swagger 명세 정비(§6.3) · ② 테스트 피라미드 실측(§6.4) · ③ 무중단 배포 probe(§7, §8) · ④ Agile/Jira 발표 산출물 · ⑤ 교사 Google OAuth(REQ-006)
 **v2.1 변경**: §10 OLAP·분석, §11 AI 어시스턴트(데모), §7 인프라(로컬 docker-compose 유지), §9 RISK 테이블 재구성
 **프로젝트 성격**: 졸업 평가용 과제 (로컬 프로토타입). 운영 사용자 0명. 평가 마감 2026-07-03 / 라이브 데모 + 발표.
 
@@ -189,7 +189,7 @@
 | 통합 (integration) | testcontainers 실 Postgres, `backend/tests/integration/` | outbox→publisher→worker→`analytics.*` 정합성, SKIP LOCKED scale=3 중복 처리 0 |
 | E2E | Playwright, `frontend/e2e/*.spec.ts` | 11 spec — 로그인·성적·피드백·분석 RBAC·챗봇 PII·모바일 반응형 |
 
-> Frontend 컴포넌트 단위 테스트는 호스트 환경 이슈(Node 25 ≠ vitest 1.6 + Linux node_modules 바이너리)로 일시 보류 — 근본 원인·해결책은 `docs/notes/frontend-test-env-fix.md`. E2E가 frontend 동작을 실 브라우저로 검증하므로 평가 신뢰성은 확보됨.
+> Frontend 컴포넌트 단위 테스트는 호스트 환경 이슈(Node 25 ≠ vitest 1.6 + Linux node_modules 바이너리)로 일시 보류 — E2E가 frontend 동작을 실 브라우저로 검증하므로 평가 신뢰성은 확보됨.
 
 ---
 
@@ -235,7 +235,7 @@
 | NEIS 등 외부 교육행정 시스템 연동 | CSV/Excel로 대체 |
 | 모바일 앱 | 웹 반응형으로 대체 |
 | 이메일 알림 | 평가 후 |
-| 쿠버네티스 / EKS 운영 도입 | 운영 클러스터는 평가 후. 단, 무중단 배포 개념 입증을 위해 **예시 매니페스트**(`deploy/k8s/`, RollingUpdate `maxUnavailable=0` + liveness/readiness probe)를 작성해 발표에 활용. Render Background Worker로 동등 분산 표현 충족 |
+| 쿠버네티스 / EKS 운영 도입 | 운영 클러스터는 평가 후. 무중단 배포 개념은 앱 레벨 liveness/readiness probe + Render 롤링 재배포(`maxUnavailable=0` 동등)로 입증. Render Background Worker로 동등 분산 표현 충족 |
 | 100개 이상 학교 대규모 확장 | 평가 후 |
 | AI 기반 성적 분석·추천 (벡터 검색·RAG 정식 도입) | 평가 후 |
 | 학교 간 데이터 공유 | 학교 단위 완전 격리 |

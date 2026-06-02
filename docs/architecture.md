@@ -3,7 +3,7 @@
 **버전**: 1.3 (발표 보완 — 교사 OAuth, 무중단 배포 probe, OpenAPI 명세)
 **작성일**: 2026-05-31 (v1.2 → 2026-05-23)
 **기반 문서**: PRD v2.2, Design Spec v2.1, ADR-001 (재작성), ~~ADR-002 (Outbox + Kafka)~~ → **ADR-003** (Outbox + Postgres LISTEN/NOTIFY + SKIP LOCKED)
-**v1.3 변경**: 교사 Google OAuth 흐름(§4.5, §7.2) · 무중단 배포 liveness/readiness probe + 예시 K8s 매니페스트(§8) · OpenAPI 명세 산출(§4.6)
+**v1.3 변경**: 교사 Google OAuth 흐름(§4.5, §7.2) · 무중단 배포 liveness/readiness probe(§8) · OpenAPI 명세 산출(§4.6)
 **프로젝트 성격**: 졸업 평가용 프로토타입 (Render + Vercel 클라우드 배포 + 로컬 docker-compose). 운영 사용자 0명. 평가 마감 2026-07-03 / 라이브 데모 + 발표.
 
 ---
@@ -395,13 +395,13 @@ make demo-scale          # docker-compose up --scale analytics-worker=3
 
 핵심: **liveness ≠ readiness**. DB가 잠시 끊겨도 프로세스는 살아있으므로(liveness OK) 재시작하지 않고, readiness만 실패시켜 트래픽에서 일시 제외 → 복구 시 자동 재합류. 부팅 중 DB 미준비 상태에서 트래픽 수신을 막는다.
 
-**롤링 시퀀스** (Render 자동 / 예시 K8s 동일 의미론):
+**롤링 시퀀스** (Render 자동 배포):
 ```
-신버전 Pod 기동 → /ready 통과 대기 → LB에 합류 → 구버전 트래픽 드레인 → 구버전 종료
+신버전 인스턴스 기동 → /ready 통과 대기 → LB에 합류 → 구버전 트래픽 드레인 → 구버전 종료
 ```
-- `deploy/k8s/backend-deployment.yaml`: `RollingUpdate maxUnavailable=0, maxSurge=1` + liveness/readiness probe (신 Pod ready 전까지 구 Pod 유지 → 가용 용량 0 구간 없음)
-- `deploy/k8s/analytics-worker-deployment.yaml`: worker `replicas=3` (SKIP LOCKED 수평 확장 시연), publisher 단일
-- **예시 매니페스트의 위치**: 운영 K8s 클러스터는 평가 후 트랙. 본 yaml은 커리큘럼의 "무중단 배포·롤링 업데이트" 개념을 **probe 구현 + 의도된 토폴로지**로 입증하기 위한 산출물이며, 실제 demo는 Render 롤링 재배포로 동등 시연 (`docs/notes/zero-downtime-deployment.md`)
+- 백엔드 롤링 재배포: 신 인스턴스가 `/ready` 통과 전까지 구 인스턴스 유지 → 가용 용량 0 구간 없음 (`maxUnavailable=0` 동등 의미론)
+- analytics-worker는 Render Background Worker로 수평 확장 (`replicas=3`, SKIP LOCKED 분산 처리), publisher 단일
+- 운영 K8s 클러스터는 평가 후 트랙. "무중단 배포·롤링 업데이트" 개념은 앱 레벨 liveness/readiness probe 구현으로 입증하며, 실제 demo는 Render 롤링 재배포로 동등 시연
 
 ---
 

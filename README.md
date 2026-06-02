@@ -21,7 +21,7 @@
 | **Cloud** (Vercel + Render) | 외부 접근용 라이브 demo URL | Vercel(Frontend) + Render(Backend Web + outbox-publisher + analytics-worker×3) + Render Postgres |
 | **Local** (docker-compose) | 일상 개발 + 분산 시연 (`--scale analytics-worker=N`) | 위 컴포넌트 동등 + Vite dev server (Kafka·외부 브로커 불필요 — Postgres NOTIFY를 message bus로) |
 
-자세한 CDC 아키텍처: [`docs/architecture.md`](docs/architecture.md) · [ADR-003](docs/decisions/003-cdc-replace-kafka-with-listen-notify.md)
+자세한 CDC 아키텍처: [`docs/architecture.md`](docs/architecture.md)
 
 ## Quick demo (5 min, 로컬)
 
@@ -45,8 +45,6 @@ docker compose exec backend python /scripts/demo_seed.py
 | 3 | AI 비서 질의 | `/chat` → "이번 학기 평균 좀 알려줘" |
 | 4 | 분산 처리 시연 | 새 터미널 `make demo-scale-logs` — 3개 워커가 SKIP LOCKED로 작업 분배 |
 | 5 | 정리 | `make demo-scale-down` |
-
-발표용 자료: [발표 아웃라인](docs/notes/presentation-outline.md) · [리허설 체크리스트](docs/notes/demo-rehearsal-checklist.md) · [분산 데모 가이드](docs/notes/demo-scale-script.md)
 
 ## Quick Start (개발용)
 

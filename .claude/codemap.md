@@ -191,11 +191,7 @@ student-manager/
 ├── docs/
 │   ├── prd.md                         # Product requirements
 │   ├── design-spec.md                 # API + data model spec
-│   ├── architecture.md                # System architecture v1.1
-│   ├── decisions/
-│   │   ├── 001-olap-and-infra-roadmap.md
-│   │   └── 002-cdc-pattern-outbox-kafka.md  # ADR: Outbox + Kafka KRaft
-│   └── notes/2026-05-03-v2.1-architecture-grill.md
+│   └── architecture.md                # System architecture v1.1
 │
 ├── scripts/
 │   └── kafka_smoke.py                 # Kafka KRaft round-trip smoke test
