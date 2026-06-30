@@ -27,6 +27,7 @@
 
 ## Quick demo (5 min, 로컬)
 
+Youtube: https://youtu.be/zjmxgmyBY3Y?si=Al8BrJuTK7_zgKCJ
 **준비물**: Docker Desktop (또는 OrbStack), 4 GB+ 여유 RAM. Node/Python 직접 설치 불필요.
 
 ```bash
