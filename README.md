@@ -1,5 +1,7 @@
 # Student Manager
 
+<img width="802" height="446" alt="Screenshot 2026-06-30 at 10 57 45 AM" src="https://github.com/user-attachments/assets/1f539e70-cd58-4873-8af8-1c5bb9d0f6fc" />
+
 학생 성적·상담 통합 관리 웹앱. FastAPI 백엔드 + React/Vite 프론트엔드 + **Postgres LISTEN/NOTIFY 기반 이벤트 분석 파이프라인** + LLM 챗봇.
 
 ## 🌐 라이브 데모
